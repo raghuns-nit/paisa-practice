@@ -11,6 +11,7 @@ export interface Profile {
   auth_user_id: string | null;
   display_name: string;
   role: 'parent' | 'learner';
+  is_super_admin: boolean;
   sim_date: string;
   phone_sim: string | null;
   failed_attempts: number;

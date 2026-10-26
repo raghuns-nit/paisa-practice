@@ -248,7 +248,7 @@ export function SignUp() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="input"
-              placeholder="e.g. demo_parent"
+              placeholder="e.g. raghu"
               required
             />
           </div>

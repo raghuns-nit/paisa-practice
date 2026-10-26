@@ -140,7 +140,7 @@ export function Login() {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="input pl-9"
-                    placeholder="e.g. demo_parent"
+                    placeholder="e.g. raghu"
                     autoComplete="username"
                     required
                   />

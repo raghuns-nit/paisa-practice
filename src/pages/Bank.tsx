@@ -1150,7 +1150,12 @@ function hashStr(s: string): number {
   return h;
 }
 
-function deriveKyc(name: string): { pan: string; dob: string; aadhar4: string } {
+function deriveKyc(name: string, meta?: Record<string, unknown> | null): { pan: string; dob: string; aadhar4: string } {
+  const stored = meta?.kyc as { pan?: string; dob?: string; aadhaar?: string } | undefined;
+  if (stored?.pan) {
+    const aadhar4 = (stored.aadhaar || '').slice(-4);
+    return { pan: stored.pan, dob: stored.dob || '', aadhar4 };
+  }
   const h = hashStr(name || 'ICICI');
   const letters = name.toUpperCase().replace(/[^A-Z]/g, '').padEnd(5, 'X').slice(0, 5);
   const digits = String(1000 + (h % 9000));
@@ -1189,7 +1194,7 @@ function DematForm({ account }: { account: Account }) {
   }, [profile, refreshKey]);
 
   if (!profile) return null;
-  const kyc = deriveKyc(profile.display_name);
+  const kyc = deriveKyc(profile.display_name, profile.meta);
 
   const storedMeta = (profile.meta?.demat as { exchanges?: string[]; segments?: string[] } | undefined) ?? undefined;
 

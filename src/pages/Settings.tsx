@@ -9,7 +9,7 @@ import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { formatINR } from '../lib/money';
 import { formatDate } from '../lib/dates';
-import type { Profile, Account } from '../lib/types';
+import type { Profile, Account, BondHolding } from '../lib/types';
 
 interface FamilyMember {
   id: string;
@@ -750,10 +750,13 @@ function DataEditor({ onResult }: {
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [bonds, setBonds] = useState<BondHolding[]>([]);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
-  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [loadingData, setLoadingData] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editingBond, setEditingBond] = useState<BondHolding | null>(null);
   const [showReassign, setShowReassign] = useState<Account | null>(null);
+  const [showReassignBond, setShowReassignBond] = useState<BondHolding | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -783,25 +786,28 @@ function DataEditor({ onResult }: {
     })();
   }, [onResult]);
 
+  async function refreshData(profileId: string) {
+    setLoadingData(true);
+    try {
+      const [accRes, bondRes] = await Promise.all([
+        supabase.from('accounts').select('*').eq('profile_id', profileId).order('created_at'),
+        supabase.from('bond_holdings').select('*').eq('profile_id', profileId).order('created_at'),
+      ]);
+      if (accRes.error) throw accRes.error;
+      if (bondRes.error) throw bondRes.error;
+      setAccounts((accRes.data as Account[]) ?? []);
+      setBonds((bondRes.data as BondHolding[]) ?? []);
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setLoadingData(false);
+    }
+  }
+
   useEffect(() => {
     if (!selectedProfileId) return;
-    (async () => {
-      setLoadingAccounts(true);
-      try {
-        const { data, error } = await supabase
-          .from('accounts')
-          .select('*')
-          .eq('profile_id', selectedProfileId)
-          .order('created_at');
-        if (error) throw error;
-        setAccounts((data as Account[]) ?? []);
-      } catch (e) {
-        onResult({ ok: false, msg: (e as Error).message });
-      } finally {
-        setLoadingAccounts(false);
-      }
-    })();
-  }, [selectedProfileId, onResult]);
+    refreshData(selectedProfileId);
+  }, [selectedProfileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSaveAccount(account: Account, newLabel: string, newBalancePaise: number) {
     try {
@@ -812,9 +818,7 @@ function DataEditor({ onResult }: {
       if (error) throw error;
       onResult({ ok: true, msg: `Account "${newLabel}" updated.` });
       setEditingAccount(null);
-      // Refresh accounts
-      const { data } = await supabase.from('accounts').select('*').eq('profile_id', selectedProfileId).order('created_at');
-      setAccounts((data as Account[]) ?? []);
+      await refreshData(selectedProfileId);
     } catch (e) {
       onResult({ ok: false, msg: (e as Error).message });
     }
@@ -843,9 +847,47 @@ function DataEditor({ onResult }: {
 
       onResult({ ok: true, msg: `Account "${account.label}" and its transactions reassigned.` });
       setShowReassign(null);
-      // Refresh accounts
-      const { data } = await supabase.from('accounts').select('*').eq('profile_id', selectedProfileId).order('created_at');
-      setAccounts((data as Account[]) ?? []);
+      await refreshData(selectedProfileId);
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    }
+  }
+
+  async function handleSaveBond(bond: BondHolding, updates: Partial<BondHolding>) {
+    try {
+      const { error } = await supabase
+        .from('bond_holdings')
+        .update({
+          issuer_demo: updates.issuer_demo,
+          face_value_paise: updates.face_value_paise,
+          units: updates.units,
+          coupon_rate_bps: updates.coupon_rate_bps,
+          payout_frequency: updates.payout_frequency,
+          issue_date: updates.issue_date,
+          maturity_date: updates.maturity_date,
+          purchase_price_paise: updates.purchase_price_paise,
+          status: updates.status,
+        })
+        .eq('id', bond.id);
+      if (error) throw error;
+      onResult({ ok: true, msg: `Bond "${updates.issuer_demo}" updated.` });
+      setEditingBond(null);
+      await refreshData(selectedProfileId);
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    }
+  }
+
+  async function handleReassignBond(bond: BondHolding, toProfileId: string) {
+    try {
+      const { error } = await supabase
+        .from('bond_holdings')
+        .update({ profile_id: toProfileId })
+        .eq('id', bond.id);
+      if (error) throw error;
+      onResult({ ok: true, msg: `Bond "${bond.issuer_demo}" reassigned.` });
+      setShowReassignBond(null);
+      await refreshData(selectedProfileId);
     } catch (e) {
       onResult({ ok: false, msg: (e as Error).message });
     }
@@ -870,38 +912,71 @@ function DataEditor({ onResult }: {
         </select>
       </div>
 
-      {loadingAccounts ? (
-        <div className="text-sm text-ink-400">Loading accounts...</div>
-      ) : accounts.length === 0 ? (
-        <div className="text-sm text-ink-400 text-center py-8">No accounts for this user.</div>
+      {loadingData ? (
+        <div className="text-sm text-ink-400">Loading data...</div>
       ) : (
-        <div className="space-y-2">
-          {accounts.map(acc => (
-            <div key={acc.id} className="rounded-lg border border-ink-200 px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-ink-800">{acc.label}</p>
-                  <p className="text-xs text-ink-400 uppercase">{acc.product.replace(/_/g, ' ')} · {acc.status}</p>
-                  <p className="text-sm text-ink-700 mt-1">{formatINR(acc.balance_paise)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setEditingAccount(acc)}
-                    className="btn-ghost !py-1.5 text-xs text-purple-600 hover:bg-purple-50"
-                  >
-                    <Edit2 className="h-3 w-3" /> Edit
-                  </button>
-                  <button
-                    onClick={() => setShowReassign(acc)}
-                    className="btn-ghost !py-1.5 text-xs text-blue-600 hover:bg-blue-50"
-                  >
-                    <ArrowRightLeft className="h-3 w-3" /> Reassign
-                  </button>
-                </div>
+        <>
+          {/* Accounts section */}
+          <div>
+            <h3 className="text-xs font-medium text-ink-500 uppercase tracking-wide mb-2">Bank Accounts</h3>
+            {accounts.length === 0 ? (
+              <div className="text-sm text-ink-400 text-center py-4 rounded-lg border border-ink-100">No accounts for this user.</div>
+            ) : (
+              <div className="space-y-2">
+                {accounts.map(acc => (
+                  <div key={acc.id} className="rounded-lg border border-ink-200 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-ink-800">{acc.label}</p>
+                        <p className="text-xs text-ink-400 uppercase">{acc.product.replace(/_/g, ' ')} · {acc.status}</p>
+                        <p className="text-sm text-ink-700 mt-1">{formatINR(acc.balance_paise)}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setEditingAccount(acc)} className="btn-ghost !py-1.5 text-xs text-purple-600 hover:bg-purple-50">
+                          <Edit2 className="h-3 w-3" /> Edit
+                        </button>
+                        <button onClick={() => setShowReassign(acc)} className="btn-ghost !py-1.5 text-xs text-blue-600 hover:bg-blue-50">
+                          <ArrowRightLeft className="h-3 w-3" /> Reassign
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
-        </div>
+            )}
+          </div>
+
+          {/* Bonds section */}
+          <div>
+            <h3 className="text-xs font-medium text-ink-500 uppercase tracking-wide mb-2">Bond Holdings</h3>
+            {bonds.length === 0 ? (
+              <div className="text-sm text-ink-400 text-center py-4 rounded-lg border border-ink-100">No bonds for this user.</div>
+            ) : (
+              <div className="space-y-2">
+                {bonds.map(bond => (
+                  <div key={bond.id} className="rounded-lg border border-ink-200 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-ink-800">{bond.issuer_demo}</p>
+                        <p className="text-xs text-ink-400 uppercase capitalize">{bond.status} · {bond.payout_frequency} payout · {bond.coupon_rate_bps / 100}% coupon</p>
+                        <p className="text-sm text-ink-700 mt-1">Face: {formatINR(bond.face_value_paise)} · Units: {bond.units}</p>
+                        <p className="text-xs text-ink-400">Matures: {formatDate(bond.maturity_date)}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setEditingBond(bond)} className="btn-ghost !py-1.5 text-xs text-purple-600 hover:bg-purple-50">
+                          <Edit2 className="h-3 w-3" /> Edit
+                        </button>
+                        <button onClick={() => setShowReassignBond(bond)} className="btn-ghost !py-1.5 text-xs text-blue-600 hover:bg-blue-50">
+                          <ArrowRightLeft className="h-3 w-3" /> Reassign
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {editingAccount && (
@@ -919,6 +994,24 @@ function DataEditor({ onResult }: {
           currentProfileId={selectedProfileId}
           onClose={() => setShowReassign(null)}
           onConfirm={(toId) => handleReassign(showReassign, toId)}
+        />
+      )}
+
+      {editingBond && (
+        <EditBondModal
+          bond={editingBond}
+          onClose={() => setEditingBond(null)}
+          onSave={(updates) => handleSaveBond(editingBond, updates)}
+        />
+      )}
+
+      {showReassignBond && (
+        <ReassignBondModal
+          bond={showReassignBond}
+          members={members}
+          currentProfileId={selectedProfileId}
+          onClose={() => setShowReassignBond(null)}
+          onConfirm={(toId) => handleReassignBond(showReassignBond, toId)}
         />
       )}
     </div>
@@ -986,6 +1079,146 @@ function ReassignModal({ account, members, currentProfileId, onClose, onConfirm 
 
         <p className="text-sm text-ink-600">
           Reassign <strong>{account.label}</strong> ({formatINR(account.balance_paise)}) and all its transactions to another user.
+        </p>
+
+        <div>
+          <label className="label">Transfer To</label>
+          <select value={targetId} onChange={e => setTargetId(e.target.value)} className="input">
+            <option value="">Select a user...</option>
+            {members.filter(m => m.id !== currentProfileId).map(m => (
+              <option key={m.id} value={m.id}>{m.display_name} ({m.role})</option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          onClick={() => targetId && onConfirm(targetId)}
+          disabled={!targetId}
+          className="btn-primary w-full"
+        >
+          <ArrowRightLeft className="h-4 w-4" /> Reassign
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EditBondModal({ bond, onClose, onSave }: {
+  bond: BondHolding;
+  onClose: () => void;
+  onSave: (updates: Partial<BondHolding>) => void;
+}) {
+  const [issuer, setIssuer] = useState(bond.issuer_demo);
+  const [faceValueStr, setFaceValueStr] = useState(String(bond.face_value_paise / 100));
+  const [units, setUnits] = useState(String(bond.units));
+  const [couponBps, setCouponBps] = useState(String(bond.coupon_rate_bps));
+  const [payoutFreq, setPayoutFreq] = useState(bond.payout_frequency);
+  const [issueDate, setIssueDate] = useState(bond.issue_date);
+  const [maturityDate, setMaturityDate] = useState(bond.maturity_date);
+  const [purchasePriceStr, setPurchasePriceStr] = useState(String(bond.purchase_price_paise / 100));
+  const [status, setStatus] = useState(bond.status);
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <Edit2 className="h-5 w-5 text-purple-600" /> Edit Bond
+          </h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <form onSubmit={e => {
+          e.preventDefault();
+          onSave({
+            issuer_demo: issuer.trim(),
+            face_value_paise: Math.round(parseFloat(faceValueStr) * 100),
+            units: parseInt(units, 10),
+            coupon_rate_bps: parseInt(couponBps, 10),
+            payout_frequency: payoutFreq,
+            issue_date: issueDate,
+            maturity_date: maturityDate,
+            purchase_price_paise: Math.round(parseFloat(purchasePriceStr) * 100),
+            status,
+          });
+        }} className="space-y-3">
+          <div>
+            <label className="label">Issuer</label>
+            <input type="text" value={issuer} onChange={e => setIssuer(e.target.value)} className="input" required autoFocus />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Face Value (₹)</label>
+              <input type="number" step="0.01" value={faceValueStr} onChange={e => setFaceValueStr(e.target.value)} className="input" required />
+            </div>
+            <div>
+              <label className="label">Units</label>
+              <input type="number" value={units} onChange={e => setUnits(e.target.value)} className="input" required />
+            </div>
+            <div>
+              <label className="label">Coupon Rate (bps)</label>
+              <input type="number" value={couponBps} onChange={e => setCouponBps(e.target.value)} className="input" required />
+              <p className="text-xs text-ink-400 mt-0.5">{(parseInt(couponBps, 10) / 100).toFixed(2)}%</p>
+            </div>
+            <div>
+              <label className="label">Payout Frequency</label>
+              <select value={payoutFreq} onChange={e => setPayoutFreq(e.target.value as BondHolding['payout_frequency'])} className="input">
+                {['monthly', 'quarterly', 'half_yearly', 'annual', 'cumulative'].map(f => (
+                  <option key={f} value={f}>{f.replace(/_/g, ' ')}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Issue Date</label>
+              <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} className="input" required />
+            </div>
+            <div>
+              <label className="label">Maturity Date</label>
+              <input type="date" value={maturityDate} onChange={e => setMaturityDate(e.target.value)} className="input" required />
+            </div>
+            <div>
+              <label className="label">Purchase Price (₹)</label>
+              <input type="number" step="0.01" value={purchasePriceStr} onChange={e => setPurchasePriceStr(e.target.value)} className="input" required />
+            </div>
+            <div>
+              <label className="label">Status</label>
+              <select value={status} onChange={e => setStatus(e.target.value as BondHolding['status'])} className="input">
+                {['active', 'matured', 'sold'].map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <button type="submit" className="btn-primary w-full">
+            <CheckCircle2 className="h-4 w-4" /> Save Changes
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ReassignBondModal({ bond, members, currentProfileId, onClose, onConfirm }: {
+  bond: BondHolding;
+  members: FamilyMember[];
+  currentProfileId: string;
+  onClose: () => void;
+  onConfirm: (toProfileId: string) => void;
+}) {
+  const [targetId, setTargetId] = useState('');
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <ArrowRightLeft className="h-5 w-5 text-blue-600" /> Reassign Bond
+          </h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <p className="text-sm text-ink-600">
+          Reassign <strong>{bond.issuer_demo}</strong> ({formatINR(bond.face_value_paise)}, {bond.units} units) to another user.
         </p>
 
         <div>

@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { loadRulesCache } from '../lib/rules';
 import type { Profile } from '../lib/types';
 
+
 interface AuthContextValue {
   session: Session | null;
   profile: Profile | null;
@@ -11,6 +12,7 @@ interface AuthContextValue {
   loading: boolean;
   signIn: (username: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, setupCode: string, profileId: string) => Promise<{ error: string | null }>;
+  createProfile: (email: string, password: string, setupCode: string, displayName: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   setProfile: (p: Profile) => void;
@@ -128,6 +130,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: null };
   }, []);
 
+  const createProfile = useCallback(async (email: string, password: string, setupCode: string, displayName: string) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) return { error: error.message };
+    if (!data.user) return { error: 'Sign-up failed: no user returned.' };
+
+    const { error: rpcError } = await supabase.rpc('create_family_profile', {
+      p_setup_code: setupCode,
+      p_display_name: displayName,
+    });
+
+    if (rpcError) {
+      return { error: rpcError.message };
+    }
+
+    return { error: null };
+  }, []);
+
   const signOut = useCallback(async () => {
     localStorage.removeItem('active_profile_id');
     setProfileState(null);
@@ -141,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ session, profile, profiles, loading, signIn, signUp, signOut, refreshProfile, setProfile }}>
+    <AuthContext.Provider value={{ session, profile, profiles, loading, signIn, signUp, createProfile, signOut, refreshProfile, setProfile }}>
       {children}
     </AuthContext.Provider>
   );

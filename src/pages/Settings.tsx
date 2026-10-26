@@ -1,12 +1,24 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   User, Lock, Unlock, KeyRound, RotateCcw, LogOut,
   Loader2, CheckCircle2, AlertCircle, Shield, Smartphone, X,
+  Users, Crown, GraduationCap, ArrowUpCircle, ArrowDownCircle,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { formatDate } from '../lib/dates';
 import type { Profile } from '../lib/types';
+
+interface FamilyMember {
+  id: string;
+  display_name: string;
+  role: string;
+  auth_user_id: string | null;
+  sim_date: string;
+  phone_sim: string | null;
+  failed_attempts: number;
+  locked_until: string | null;
+}
 
 export function Settings() {
   const { profile, signOut, refreshProfile } = useAuth();
@@ -18,6 +30,8 @@ export function Settings() {
   if (!profile) return null;
 
   const isLocked = profile.locked_until !== null && new Date(profile.locked_until) > new Date();
+
+  const isParent = profile.role === 'parent';
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -39,7 +53,10 @@ export function Settings() {
           </div>
           <div>
             <p className="text-xs text-ink-400 uppercase">Role</p>
-            <p className="text-ink-800 font-medium capitalize">{profile.role}</p>
+            <div className="flex items-center gap-1.5">
+              {isParent ? <Crown className="h-3.5 w-3.5 text-brand-500" /> : <GraduationCap className="h-3.5 w-3.5 text-blue-500" />}
+              <p className="text-ink-800 font-medium capitalize">{profile.role}</p>
+            </div>
           </div>
           <div>
             <p className="text-xs text-ink-400 uppercase">Sim Date</p>
@@ -66,6 +83,11 @@ export function Settings() {
           </div>
         )}
       </div>
+
+      {/* Family management - only for parents */}
+      {isParent && (
+        <FamilyManagement profileId={profile.id} onResult={setResult} />
+      )}
 
       {/* Action cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -436,6 +458,177 @@ function ResetSimModal({ profile, onClose, onDone }: {
           </button>
         </form>
       </div>
+    </div>
+  );
+}
+
+function FamilyManagement({ profileId, onResult }: {
+  profileId: string;
+  onResult: (r: { ok: boolean; msg: string }) => void;
+}) {
+  const [members, setMembers] = useState<FamilyMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ id: string; name: string; action: 'promote' | 'demote' } | null>(null);
+
+  const fetchMembers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_family_members');
+      if (error) throw error;
+      setMembers((data as FamilyMember[]) ?? []);
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }, [onResult]);
+
+  useEffect(() => {
+    fetchMembers();
+  }, [fetchMembers]);
+
+  async function handlePromote(memberId: string) {
+    setActionLoading(memberId);
+    try {
+      const { error } = await supabase.rpc('promote_to_parent', { p_profile_id: memberId });
+      if (error) throw error;
+      await fetchMembers();
+      onResult({ ok: true, msg: 'Member promoted to Parent/Admin.' });
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setActionLoading(null);
+      setConfirmAction(null);
+    }
+  }
+
+  async function handleDemote(memberId: string) {
+    setActionLoading(memberId);
+    try {
+      const { error } = await supabase.rpc('demote_to_learner', { p_profile_id: memberId });
+      if (error) throw error;
+      await fetchMembers();
+      onResult({ ok: true, msg: 'Member demoted to Learner.' });
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setActionLoading(null);
+      setConfirmAction(null);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Users className="h-5 w-5 text-brand-600" />
+          <h2 className="text-lg font-semibold text-ink-800">Family Management</h2>
+        </div>
+        <div className="text-sm text-ink-400">Loading family members...</div>
+      </div>
+    );
+  }
+
+  const parentCount = members.filter(m => m.role === 'parent').length;
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Users className="h-5 w-5 text-brand-600" />
+        <h2 className="text-lg font-semibold text-ink-800">Family Management</h2>
+        <span className="badge bg-brand-50 text-brand-700 ml-auto">{members.length} members</span>
+      </div>
+      <p className="text-sm text-ink-500 mb-4">
+        As a Parent/Admin, you can promote learners to parent or demote other parents back to learner. At least one parent must always remain.
+      </p>
+
+      <div className="space-y-2">
+        {members.map((m) => {
+          const isMe = m.id === profileId;
+          const isParent = m.role === 'parent';
+          return (
+            <div key={m.id} className={`flex items-center justify-between rounded-lg border px-4 py-3 ${
+              isParent ? 'border-brand-200 bg-brand-50/30' : 'border-ink-200'
+            }`}>
+              <div className="flex items-center gap-3">
+                {isParent ? (
+                  <div className="h-8 w-8 rounded-full bg-brand-100 flex items-center justify-center">
+                    <Crown className="h-4 w-4 text-brand-600" />
+                  </div>
+                ) : (
+                  <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                    <GraduationCap className="h-4 w-4 text-blue-600" />
+                  </div>
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-ink-800">{m.display_name}</p>
+                    {isMe && <span className="badge bg-ink-100 text-ink-500 text-[10px]">You</span>}
+                    {!m.auth_user_id && <span className="badge bg-warning-50 text-warning-700 text-[10px]">Unclaimed</span>}
+                  </div>
+                  <p className="text-xs text-ink-400 capitalize">{m.role}</p>
+                </div>
+              </div>
+
+              {!isMe && (
+                <div className="flex items-center gap-2">
+                  {isParent ? (
+                    <button
+                      onClick={() => setConfirmAction({ id: m.id, name: m.display_name, action: 'demote' })}
+                      disabled={parentCount <= 1 || actionLoading === m.id}
+                      className="btn-ghost !py-1.5 text-xs text-blue-600 hover:bg-blue-50"
+                      title={parentCount <= 1 ? 'Cannot demote — at least one parent must remain' : 'Demote to Learner'}
+                    >
+                      {actionLoading === m.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><ArrowDownCircle className="h-3 w-3" /> Make Learner</>}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmAction({ id: m.id, name: m.display_name, action: 'promote' })}
+                      disabled={actionLoading === m.id}
+                      className="btn-ghost !py-1.5 text-xs text-brand-600 hover:bg-brand-50"
+                      title="Promote to Parent/Admin"
+                    >
+                      {actionLoading === m.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><ArrowUpCircle className="h-3 w-3" /> Make Parent</>}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {confirmAction && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={() => setConfirmAction(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2">
+              {confirmAction.action === 'promote' ? (
+                <ArrowUpCircle className="h-5 w-5 text-brand-600" />
+              ) : (
+                <ArrowDownCircle className="h-5 w-5 text-blue-600" />
+              )}
+              <h3 className="font-semibold text-ink-900">
+                {confirmAction.action === 'promote' ? 'Promote to Parent' : 'Demote to Learner'}
+              </h3>
+            </div>
+            <p className="text-sm text-ink-600">
+              {confirmAction.action === 'promote'
+                ? `Promote ${confirmAction.name} to Parent/Admin? They will be able to manage family members, unlock accounts, and view all family data.`
+                : `Demote ${confirmAction.name} to Learner? They will lose family management access but keep their own accounts and data.`}
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmAction(null)} className="btn-secondary flex-1">Cancel</button>
+              <button
+                onClick={() => confirmAction.action === 'promote' ? handlePromote(confirmAction.id) : handleDemote(confirmAction.id)}
+                className={confirmAction.action === 'promote' ? 'btn-primary flex-1' : 'btn-secondary flex-1'}
+              >
+                {confirmAction.action === 'promote' ? 'Promote' : 'Demote'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

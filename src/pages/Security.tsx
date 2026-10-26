@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import {
   ShieldCheck, KeyRound, Smartphone, Lock, Loader2,
-  CheckCircle2, XCircle, AlertCircle, Gamepad2, Copy, QrCode, LockKeyhole,
+  CheckCircle2, XCircle, AlertCircle, Gamepad2, Copy, LockKeyhole,
 } from 'lucide-react';
+import QRCode from 'qrcode';
+import * as OTPAuth from 'otpauth';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { formatDate } from '../lib/dates';
 import type { Profile, TotpSecret } from '../lib/types';
 
-/** Generate a random base32 secret (32 chars). */
 function generateBase32Secret(length = 32): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let secret = '';
@@ -20,7 +21,6 @@ function generateBase32Secret(length = 32): string {
   return secret;
 }
 
-/** Generate 10 random backup codes (8 chars each, alphanumeric). */
 function generateBackupCodes(count = 10): string[] {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const codes: string[] = [];
@@ -36,13 +36,30 @@ function generateBackupCodes(count = 10): string[] {
   return codes;
 }
 
-/** Demo TOTP: verify a 6-digit code. In a real app this would compute HOTP/TOTP. Here we accept the demo code. */
+function buildTotpUri(secret: string, label: string): string {
+  const totp = new OTPAuth.TOTP({
+    issuer: 'PaisaPractice',
+    label,
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: OTPAuth.Secret.fromBase32(secret),
+  });
+  return totp.toString();
+}
+
 function verifyTotpCode(secret: string, code: string): boolean {
   if (!/^\d{6}$/.test(code)) return false;
-  // Demo: accept codes that are the last 6 digits of (secret hash + current 30s window) — simplified acceptance.
-  // For the practice app, we accept any 6-digit code when a secret is enrolled.
-  void secret;
-  return true;
+  const totp = new OTPAuth.TOTP({
+    issuer: 'PaisaPractice',
+    label: 'user',
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: OTPAuth.Secret.fromBase32(secret),
+  });
+  const expected = totp.generate();
+  return code === expected;
 }
 
 interface Scenario {
@@ -119,7 +136,6 @@ export function Security() {
         <p className="text-sm text-ink-500 mt-1">Two-factor authentication, backup codes, and scam awareness</p>
       </div>
 
-      {/* Lockout status */}
       <div className={`card p-4 flex items-start gap-3 ${isLocked ? 'bg-error-50 border-error-500/30' : 'bg-success-50 border-success-500/30'}`}>
         {isLocked ? <Lock className="h-5 w-5 text-error-600 flex-shrink-0 mt-0.5" /> : <ShieldCheck className="h-5 w-5 text-success-600 flex-shrink-0 mt-0.5" />}
         <div className="text-sm">
@@ -158,6 +174,7 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
 }) {
   const [enrolling, setEnrolling] = useState(false);
   const [generatedSecret, setGeneratedSecret] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState('');
   const [code, setCode] = useState('');
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -167,7 +184,15 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
     setGeneratedSecret(secret);
     setEnrolling(true);
     setResult(null);
-    // Save the unenrolled secret
+
+    const uri = buildTotpUri(secret, profile.display_name);
+    try {
+      const dataUrl = await QRCode.toDataURL(uri, { width: 200, margin: 1 });
+      setQrDataUrl(dataUrl);
+    } catch {
+      setQrDataUrl('');
+    }
+
     await supabase.from('totp_secrets').upsert({
       profile_id: profile.id,
       secret_base32: secret,
@@ -182,13 +207,14 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
       if (!generatedSecret) throw new Error('No secret generated. Start enrollment first.');
       const ok = verifyTotpCode(generatedSecret, code);
       if (!ok) {
-        setResult({ ok: false, msg: 'Invalid code. Please enter a 6-digit code from your authenticator app.' });
+        setResult({ ok: false, msg: 'Invalid code. Please enter the current 6-digit code from your authenticator app.' });
         return;
       }
       await supabase.from('totp_secrets').update({ enrolled: true }).eq('profile_id', profile.id);
       setResult({ ok: true, msg: 'TOTP enrolled successfully! You can now use your authenticator app for 2FA.' });
       setEnrolling(false);
       setCode('');
+      setQrDataUrl('');
       setTimeout(onRefresh, 1200);
     } catch (err) {
       setResult({ ok: false, msg: (err as Error).message });
@@ -201,6 +227,7 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
     await supabase.from('totp_secrets').delete().eq('profile_id', profile.id);
     setResult({ ok: true, msg: '2FA disabled.' });
     setGeneratedSecret('');
+    setQrDataUrl('');
     setEnrolling(false);
     setTimeout(onRefresh, 1200);
   }
@@ -227,12 +254,15 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
       ) : enrolling ? (
         <div className="space-y-4">
           <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-3 text-sm space-y-2">
-            <p className="font-medium text-blue-700">Step 1: Scan this QR code</p>
+            <p className="font-medium text-blue-700">Step 1: Scan this QR code with your authenticator app</p>
             <div className="flex justify-center my-2">
-              <div className="h-40 w-40 rounded-lg border-2 border-dashed border-ink-300 flex flex-col items-center justify-center bg-white text-ink-400">
-                <QrCode className="h-16 w-16" />
-                <span className="text-xs mt-1">QR Placeholder</span>
-              </div>
+              {qrDataUrl ? (
+                <img src={qrDataUrl} alt="TOTP QR Code" className="h-48 w-48 rounded-lg border border-ink-200" />
+              ) : (
+                <div className="h-48 w-48 rounded-lg border-2 border-dashed border-ink-300 flex items-center justify-center bg-white">
+                  <Loader2 className="h-8 w-8 animate-spin text-ink-400" />
+                </div>
+              )}
             </div>
             <p className="text-blue-600 text-xs">Or enter this secret manually in your authenticator app:</p>
             <div className="flex items-center gap-2">
@@ -265,7 +295,7 @@ function TotpSection({ profile, totp, loading, onRefresh }: {
             </div>
           </div>
 
-          <button onClick={() => { setEnrolling(false); setGeneratedSecret(''); setResult(null); }} className="text-sm text-ink-500 hover:text-ink-700">
+          <button onClick={() => { setEnrolling(false); setGeneratedSecret(''); setQrDataUrl(''); setResult(null); }} className="text-sm text-ink-500 hover:text-ink-700">
             Cancel enrollment
           </button>
         </div>
@@ -299,9 +329,7 @@ function BackupCodesSection({ profile, onCodesShown, shownCodes }: {
     setResult(null);
     try {
       const codes = generateBackupCodes(10);
-      // Delete old backup codes for this profile
       await supabase.from('backup_codes').delete().eq('profile_id', profile.id);
-      // Insert new ones (store as hashed in a real app; here we just store the code for demo)
       const rows = codes.map((c) => ({
         profile_id: profile.id,
         code_hash: c,
@@ -419,7 +447,7 @@ function ScamGame() {
           <div className="rounded-lg bg-purple-50 border border-purple-200 px-4 py-4">
             <p className="text-3xl font-bold text-purple-700">{score}/{SCENARIOS.length}</p>
             <p className="text-sm text-purple-600 mt-1">
-              {score === SCENARIOS.length ? 'Perfect! You\'re a scam-spotting pro. 🛡️' :
+              {score === SCENARIOS.length ? 'Perfect! You\'re a scam-spotting pro.' :
                score >= 2 ? 'Good job! You caught most scams. Keep practising.' :
                'Keep learning — scams are tricky. Review the explanations below.'}
             </p>
@@ -476,7 +504,7 @@ function ScamGame() {
                 : 'bg-error-50 border border-error-500/30 text-error-700'
             }`}>
               <p className="font-medium">
-                {scenario.choices[selected!].correct ? '✓ Correct!' : '✗ Not quite.'}
+                {scenario.choices[selected!].correct ? 'Correct!' : 'Not quite.'}
               </p>
               <p className="mt-1">{scenario.choices[selected!].feedback}</p>
             </div>

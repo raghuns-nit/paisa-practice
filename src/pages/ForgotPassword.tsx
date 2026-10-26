@@ -71,7 +71,7 @@ export function ForgotPassword() {
         p_profile_id: profileId,
       });
       if (rpcErr) throw rpcErr;
-      setMessage('Password reset recorded (demo). In this sandbox, use the Security page after signing in to change your actual auth password.');
+      setMessage('Password reset recorded. Use the Security page after signing in to change your actual auth password.');
     } catch (e) {
       setError((e as Error).message);
     } finally {

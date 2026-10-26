@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Landmark, PiggyBank, Shield, TrendingUp, ArrowUpRight, ArrowDownRight,
@@ -7,43 +7,47 @@ import {
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { formatINR } from '../lib/money';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayStr } from '../lib/dates';
 import type { Account, Transaction } from '../lib/types';
 
 export function Dashboard() {
   const { profile } = useAuth();
+  const profileIdRef = useRef<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [recentTxns, setRecentTxns] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!profile) return;
+    const pid = profile?.id;
+    if (!pid) return;
+    if (profileIdRef.current === pid) return;
+    profileIdRef.current = pid;
     (async () => {
       setLoading(true);
       const { data: accs } = await supabase
         .from('accounts')
         .select('*')
-        .eq('profile_id', profile.id)
+        .eq('profile_id', pid)
         .order('created_at');
       setAccounts(accs as Account[] ?? []);
 
       const { data: txns } = await supabase
         .from('transactions')
         .select('*')
-        .eq('profile_id', profile.id)
+        .eq('profile_id', pid)
         .order('sim_date', { ascending: false })
         .limit(10);
       setRecentTxns(txns as Transaction[] ?? []);
       setLoading(false);
     })();
-  }, [profile]);
+  }, [profile?.id]);
 
   if (!profile) return null;
 
   const totalBalance = accounts.reduce((s, a) => s + a.balance_paise, 0);
 
   const quickLinks = [
-    { to: '/bank', label: 'Demo Bank', icon: Landmark, color: 'bg-brand-500' },
+    { to: '/bank', label: 'ICICI Bank', icon: Landmark, color: 'bg-brand-500' },
     { to: '/post-office', label: 'Post Office', icon: PiggyBank, color: 'bg-accent-500' },
     { to: '/insurance', label: 'Insurance', icon: Shield, color: 'bg-blue-500' },
     { to: '/investments', label: 'Investments', icon: TrendingUp, color: 'bg-purple-500' },
@@ -56,7 +60,7 @@ export function Dashboard() {
       <div>
         <h1 className="text-2xl font-bold text-ink-900">Welcome, {profile.display_name}</h1>
         <p className="text-sm text-ink-500 mt-1">
-          Sim date: {formatDate(profile.sim_date)} · {profile.role}
+          Today: {formatDate(todayStr())} · {profile.role === 'parent' ? 'Parent/Admin' : 'Learner'}
         </p>
       </div>
 
@@ -74,7 +78,7 @@ export function Dashboard() {
         {accounts.slice(0, 2).map((acc) => (
           <div key={acc.id} className="card p-5">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase tracking-wide text-ink-400">{acc.product}</span>
+              <span className="text-xs uppercase tracking-wide text-ink-400">{acc.product.replace(/_/g, ' ')}</span>
               <span className={`badge ${acc.status === 'active' ? 'bg-success-50 text-success-700' : 'bg-ink-100 text-ink-500'}`}>
                 {acc.status}
               </span>
@@ -120,7 +124,7 @@ export function Dashboard() {
             <div className="p-8 text-center text-ink-400">Loading...</div>
           ) : recentTxns.length === 0 ? (
             <div className="p-8 text-center text-ink-400">
-              No transactions yet. Use Time Travel to advance the simulation date and generate activity.
+              No transactions yet. Change the date from the top bar to advance the simulation and generate activity.
             </div>
           ) : (
             recentTxns.map((txn) => (

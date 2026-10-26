@@ -112,7 +112,7 @@ export function SignUp() {
             P
           </div>
           <h1 className="text-2xl font-bold text-ink-900">Create Account</h1>
-          <p className="text-sm text-ink-500 mt-1">Join your family's financial literacy sandbox</p>
+          <p className="text-sm text-ink-500 mt-1">Join your family's financial literacy practice</p>
         </div>
 
         <form onSubmit={handleSubmit} className="card p-6 space-y-4">

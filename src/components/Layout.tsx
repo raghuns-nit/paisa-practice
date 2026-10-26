@@ -5,13 +5,12 @@ import {
   FileText, Search, Settings, LogOut, Menu, X, Lock, Phone,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { SandboxBanner } from './SandboxBanner';
 import { TimeTravel } from './TimeTravel';
 import { ProfileSwitcher } from './ProfileSwitcher';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/bank', label: 'Demo Bank', icon: Landmark },
+  { to: '/bank', label: 'ICICI Bank', icon: Landmark },
   { to: '/post-office', label: 'Post Office', icon: PiggyBank },
   { to: '/insurance', label: 'Insurance', icon: Shield },
   { to: '/investments', label: 'Investments', icon: TrendingUp },
@@ -38,10 +37,9 @@ export function Layout() {
 
   return (
     <div className="min-h-screen bg-ink-50 flex flex-col">
-      <SandboxBanner />
       <div className="flex flex-1">
         {/* Sidebar - desktop */}
-        <aside className="hidden md:flex w-64 flex-col bg-ink-900 text-ink-100 min-h-[calc(100vh-30px)]">
+        <aside className="hidden md:flex w-64 flex-col bg-ink-900 text-ink-100 min-h-screen">
           <div className="px-5 py-4 border-b border-ink-800">
             <Link to="/dashboard" className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-lg bg-brand-500 flex items-center justify-center text-white font-bold text-sm">

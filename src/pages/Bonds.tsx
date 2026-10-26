@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   FileText, Landmark, Percent,
-  TrendingUp, Wallet, RefreshCw,
+  TrendingUp, Wallet, RefreshCw, AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { formatINR } from '../lib/money';
 import { formatDate, daysBetween } from '../lib/dates';
 import { VerifyBadge } from '../components/VerifyBadge';
-import type { BondHolding, BondCashflow, Account } from '../lib/types';
+import type { BondHolding, BondCashflow, Account, DematAccount } from '../lib/types';
 
 interface BondRow extends BondHolding {
   cashflows?: BondCashflow[];
@@ -51,7 +52,9 @@ function xirr(cashflows: { date: string; amount: number }[]): number | null {
 
 export function Bonds() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const [bonds, setBonds] = useState<BondRow[]>([]);
+  const [demat, setDemat] = useState<DematAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -61,6 +64,14 @@ export function Bonds() {
     (async () => {
       setLoading(true);
       const profileId = profile.id;
+
+      const { data: dematRow } = await supabase
+        .from('demat_accounts')
+        .select('*')
+        .eq('profile_id', profileId)
+        .eq('status', 'active')
+        .maybeSingle();
+      setDemat((dematRow as DematAccount | null) ?? null);
 
       const { data: bondRows } = await supabase
         .from('bond_holdings')
@@ -119,6 +130,19 @@ export function Bonds() {
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
         </button>
       </div>
+
+      {!demat && (
+        <div className="card p-4 bg-warning-50 border-warning-500/30 flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-warning-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-warning-700 flex-1">
+            <p className="font-medium">No active demat account</p>
+            <p className="mt-1">A demat account is required to hold bonds. Bonds are held in dematerialized form as per SEBI guidelines.</p>
+            <button onClick={() => navigate('/bank')} className="btn-secondary mt-2 !py-1.5 text-xs">
+              Open Demat Account
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

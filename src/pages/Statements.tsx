@@ -265,7 +265,7 @@ export function Statements() {
           </div>
 
           <p className="text-xs text-ink-400 text-center">
-            Statement for <strong>{acc?.label}</strong> · {result.transactions.length} transaction(s) · Sandbox demo, not a real bank document.
+            Statement for <strong>{acc?.label}</strong> · {result.transactions.length} transaction(s) · Practice simulation, not a real bank document.
           </p>
         </div>
       )}

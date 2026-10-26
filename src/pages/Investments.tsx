@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp, Plus, ArrowDownToLine, ArrowUpFromLine, Repeat, Loader2,
   CheckCircle2, AlertCircle, X, PieChart, Activity,
@@ -31,6 +32,7 @@ function deterministicPrice(code: string, date: string, startPrice: number, vola
 
 export function Investments() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const [holdings, setHoldings] = useState<HoldingRow[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [demat, setDemat] = useState<DematAccount | null>(null);
@@ -132,15 +134,18 @@ export function Investments() {
     <div className="space-y-4 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-ink-900">Investments</h1>
-        <p className="text-sm text-ink-500 mt-1">Mutual funds & demat holdings in a sandbox</p>
+        <p className="text-sm text-ink-500 mt-1">Mutual funds & demat holdings</p>
       </div>
 
       {!demat && (
         <div className="card p-4 bg-warning-50 border-warning-500/30 flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-warning-600 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-warning-700">
+          <div className="text-sm text-warning-700 flex-1">
             <p className="font-medium">No active demat account</p>
-            <p className="mt-1">A demat account is required to hold mutual funds. Open one from the Bank to get started.</p>
+            <p className="mt-1">A demat account is required to hold mutual funds and bonds.</p>
+            <button onClick={() => navigate('/bank')} className="btn-secondary mt-2 !py-1.5 text-xs">
+              Open Demat Account
+            </button>
           </div>
         </div>
       )}

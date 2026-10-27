@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Loader2, CheckCircle2, AlertCircle, Info, User, ShieldCheck, FileText, X, Receipt } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
-import { formatINR, parseRupeesToPaise, amountInWords } from '../lib/money';
+import { formatINR, parseRupeesToPaise } from '../lib/money';
 import { formatDate, addMonthsStr, todayStr } from '../lib/dates';
 import { ruleNumber, rulePaise, isUnverified } from '../lib/rules';
 import { post } from '../engine/postings';
@@ -181,7 +181,6 @@ export function PostOffice() {
         <PoChequeModal
           saAccount={showPoCheque}
           profileId={profile.id}
-          displayName={profile.display_name}
           simDate={profile.sim_date}
           onClose={() => setShowPoCheque(null)}
           onDone={() => { setShowPoCheque(null); refresh(); }}
@@ -747,10 +746,9 @@ function CreditInterestButton({ misAccount, poSaId, profileId, simDate, onDone }
   );
 }
 
-function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, onDone }: {
+function PoChequeModal({ saAccount, profileId, simDate, onClose, onDone }: {
   saAccount: Account;
   profileId: string;
-  displayName: string;
   simDate: string;
   onClose: () => void;
   onDone: () => void;
@@ -763,8 +761,6 @@ function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, on
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [, setWrittenCheques] = useState<Array<{ chequeNo: string; payee: string; amount: number; date: string }>>([]);
-
-  const paise = amountInNum ? (() => { try { return parseRupeesToPaise(amountInNum); } catch { return 0; } })() : 0;
 
   async function handleWriteAndPresent(e: React.FormEvent) {
     e.preventDefault();
@@ -829,17 +825,10 @@ function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, on
         <p className="text-sm text-ink-500">Balance: {formatINR(saAccount.balance_paise)}</p>
 
         {/* Cheque visual */}
-        <div className="relative bg-white rounded-lg shadow-md overflow-hidden" style={{ aspectRatio: '8/3.5' }}>
-          <img src="/post-office-cheque.webp" alt="Post Office Cheque" className="absolute inset-0 w-full h-full object-cover" />
-          <div className="absolute inset-0 text-ink-900 font-medium">
-            <span className="absolute right-[8%] top-[20%] font-mono text-[clamp(0.7rem,2vw,1.15rem)]">{chequeNo}</span>
-            <span className="absolute left-[16%] top-[31%] text-[clamp(0.65rem,1.8vw,1rem)]">{date}</span>
-            <span className="absolute left-[14%] top-[44%] max-w-[48%] truncate text-[clamp(0.8rem,2.3vw,1.3rem)]">{payee || 'Payee name'}</span>
-            <span className="absolute left-[7%] top-[57%] text-[clamp(0.8rem,2.2vw,1.25rem)]">{amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : 'Amount'}</span>
-            <span className="absolute left-[8%] top-[68%] max-w-[60%] truncate font-serif italic text-[clamp(0.55rem,1.5vw,0.85rem)]">{paise > 0 ? amountInWords(paise) : 'Amount in words'}</span>
-            <span className="absolute left-[4%] bottom-[8%] max-w-[42%] truncate text-[clamp(0.5rem,1.2vw,0.7rem)] text-ink-600">{memo || 'Memo'}</span>
-            <span className="absolute right-[6%] bottom-[7%] text-[clamp(0.55rem,1.4vw,0.8rem)]">{displayName}</span>
-          </div>
+        <div className="card p-3 bg-ink-50">
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-500 mb-2">Post Office cheque preview</p>
+          <img src="/post-office-cheque.webp" alt="Post Office cheque sample" className="w-full rounded-md shadow-sm" />
+          <p className="text-xs text-ink-400 mt-2">Enter the cheque details below. The sample image is shown for appearance only.</p>
         </div>
 
         <form onSubmit={handleWriteAndPresent} className="space-y-3">

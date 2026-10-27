@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   FileText, Landmark, Percent,
-  TrendingUp, Wallet, RefreshCw, AlertCircle,
+  TrendingUp, Wallet, RefreshCw, AlertCircle, Gift, X, Loader2, CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -58,6 +58,8 @@ export function Bonds() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [giftBond, setGiftBond] = useState<BondHolding | null>(null);
+  const [familyMembers, setFamilyMembers] = useState<{ id: string; display_name: string; family_role: string }[]>([]);
 
   useEffect(() => {
     if (!profile) return;
@@ -103,6 +105,19 @@ export function Bonds() {
         payoutAccount: accMap.get(b.payout_account_id),
       }));
       setBonds(rows);
+
+      // Fetch family members for gifting
+      try {
+        const { data: memberRows } = await supabase.rpc('get_family_members');
+        if (memberRows) {
+          setFamilyMembers((memberRows as Record<string, unknown>[]).map(r => ({
+            id: r.id as string,
+            display_name: r.display_name as string,
+            family_role: (r.family_role as string) ?? 'child',
+          })).filter(m => m.id !== profileId));
+        }
+      } catch { /* learners can't call get_family_members */ }
+
       setLoading(false);
     })();
   }, [profile, refreshKey]);
@@ -359,11 +374,132 @@ export function Bonds() {
                         <span>Paid: <strong className="text-ink-700">{paidCfs.length}</strong></span>
                         <span>Pending: <strong className="text-ink-700">{pendingCfs.length}</strong></span>
                       </div>
+
+                      {bond.status === 'active' && familyMembers.length > 0 && (
+                        <button
+                          onClick={() => setGiftBond(bond)}
+                          className="btn-ghost !py-1.5 text-xs text-brand-600 hover:bg-brand-50"
+                        >
+                          <Gift className="h-3 w-3" /> Gift to Family Member
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {giftBond && (
+        <BondGiftModal
+          bond={giftBond}
+          profileId={profile.id}
+          simDate={profile.sim_date}
+          familyMembers={familyMembers}
+          onClose={() => setGiftBond(null)}
+          onDone={() => { setGiftBond(null); refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function BondGiftModal({ bond, profileId, simDate, familyMembers, onClose, onDone }: {
+  bond: BondHolding;
+  profileId: string;
+  simDate: string;
+  familyMembers: { id: string; display_name: string; family_role: string }[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [toId, setToId] = useState('');
+  const [unitsStr, setUnitsStr] = useState('');
+  const [note, setNote] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setResult(null);
+    try {
+      const units = parseFloat(unitsStr);
+      if (isNaN(units) || units <= 0) throw new Error('Enter valid units');
+      if (units > bond.units + 1e-9) throw new Error(`Cannot gift more than ${bond.units} units`);
+      if (!toId) throw new Error('Select a family member');
+
+      const { error } = await supabase.from('gifts').insert({
+        from_profile_id: profileId,
+        to_profile_id: toId,
+        instrument_type: 'bond',
+        bond_holding_id: bond.id,
+        units: Math.round(units * 10000) / 10000,
+        status: 'pending',
+        sim_date: simDate,
+        note: note.trim() || null,
+      });
+      if (error) throw error;
+
+      setResult({ ok: true, msg: `Gift of ${units} bond units sent. The recipient must accept it in their Investments page.` });
+      setTimeout(onDone, 2000);
+    } catch (err) {
+      setResult({ ok: false, msg: (err as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <Gift className="h-5 w-5 text-brand-600" /> Gift Bond Units
+          </h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm space-y-1">
+          <p className="text-ink-800 font-medium">{bond.issuer_demo} · {bond.instrument_code_demo}</p>
+          <p className="text-ink-600">Available units: <strong>{bond.units}</strong></p>
+          <p className="text-xs text-ink-400">Coupon: {bond.coupon_rate_bps / 100}% · Maturity: {formatDate(bond.maturity_date)}</p>
+        </div>
+
+        <div className="rounded-lg bg-brand-50 border border-brand-200 px-3 py-2 text-xs text-brand-700">
+          The recipient must have a demat account to accept the gift. Bond units transfer once they accept.
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Gift To</label>
+            <select value={toId} onChange={e => setToId(e.target.value)} className="input" required>
+              <option value="">Select family member...</option>
+              {familyMembers.map(m => (
+                <option key={m.id} value={m.id}>{m.display_name} ({m.family_role === 'parent' ? 'Family Parent' : 'Family Child'})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Units to Gift</label>
+            <input type="text" value={unitsStr} onChange={e => setUnitsStr(e.target.value)} className="input" placeholder={`Max ${bond.units}`} required />
+          </div>
+          <div>
+            <label className="label">Note (optional)</label>
+            <input type="text" value={note} onChange={e => setNote(e.target.value)} className="input" placeholder="e.g. Birthday gift" />
+          </div>
+          <button type="submit" disabled={loading} className="btn-primary w-full">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Gift className="h-4 w-4" /> Send Gift</>}
+          </button>
+        </form>
+
+        {result && (
+          <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm animate-fade-in ${
+            result.ok ? 'bg-success-50 border border-success-500/30 text-success-700' : 'bg-error-50 border border-error-500/30 text-error-700'
+          }`}>
+            {result.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
+            <span>{result.msg}</span>
           </div>
         )}
       </div>

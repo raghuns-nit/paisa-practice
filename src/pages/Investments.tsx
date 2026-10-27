@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp, Plus, ArrowDownToLine, ArrowUpFromLine, Repeat, Loader2,
-  CheckCircle2, AlertCircle, X, PieChart, Activity,
+  CheckCircle2, AlertCircle, X, PieChart, Activity, Gift,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -11,12 +11,25 @@ import { formatDate, addMonthsStr, daysBetween } from '../lib/dates';
 import { post } from '../engine/postings';
 import { VerifyBadge } from '../components/VerifyBadge';
 import type {
-  Account, Holding, HoldingLot, Instrument, DematAccount, StandingInstruction,
+  Account, Holding, HoldingLot, Instrument, DematAccount, StandingInstruction, Gift as GiftType, BondHolding,
 } from '../lib/types';
 
 interface HoldingRow extends Holding {
   instrument?: Instrument;
   lots?: HoldingLot[];
+}
+
+interface FamilyMember {
+  id: string;
+  display_name: string;
+  role: string;
+  family_role: string;
+}
+
+interface GiftRow extends GiftType {
+  from_name?: string;
+  to_name?: string;
+  instrument_name?: string;
 }
 
 /** Deterministic price model matching the demat SIP generator. */
@@ -42,6 +55,10 @@ export function Investments() {
   const [showBuy, setShowBuy] = useState(false);
   const [sellHolding, setSellHolding] = useState<HoldingRow | null>(null);
   const [showSip, setShowSip] = useState(false);
+  const [giftHolding, setGiftHolding] = useState<HoldingRow | null>(null);
+  const [giftBond, setGiftBond] = useState<BondHolding | null>(null);
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
+  const [gifts, setGifts] = useState<GiftRow[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -102,6 +119,45 @@ export function Investments() {
         .not('to_instrument_code', 'is', null)
         .order('created_at');
       setSips((sipRows as StandingInstruction[]) ?? []);
+
+      // Fetch family members (for gifting)
+      try {
+        const { data: memberRows } = await supabase.rpc('get_family_members');
+        if (memberRows) {
+          setFamilyMembers((memberRows as Record<string, unknown>[]).map(r => ({
+            id: r.id as string,
+            display_name: r.display_name as string,
+            role: r.role as string,
+            family_role: (r.family_role as string) ?? 'child',
+          })).filter(m => m.id !== profileId));
+        }
+      } catch { /* learners can't call get_family_members — that's ok */ }
+
+      // Fetch gifts (sent and received)
+      try {
+        const { data: giftRows } = await supabase.from('gifts').select('*').order('created_at', { ascending: false });
+        if (giftRows) {
+          const gRows = giftRows as GiftType[];
+          // Fetch names for from/to profiles
+          const profileIds = new Set<string>();
+          gRows.forEach(g => { profileIds.add(g.from_profile_id); profileIds.add(g.to_profile_id); });
+          const { data: profRows } = await supabase.from('profiles').select('id, display_name').in('id', Array.from(profileIds));
+          const profMap = new Map((profRows as { id: string; display_name: string }[] ?? []).map(p => [p.id, p.display_name]));
+
+          // Fetch instrument names for MF gifts
+          const mfCodes = new Set<string>();
+          gRows.filter(g => g.instrument_type === 'mf' && g.instrument_code).forEach(g => mfCodes.add(g.instrument_code!));
+          const { data: instRows2 } = await supabase.from('instruments').select('code, name_demo').in('code', Array.from(mfCodes));
+          const instMap = new Map((instRows2 as { code: string; name_demo: string }[] ?? []).map(i => [i.code, i.name_demo]));
+
+          setGifts(gRows.map(g => ({
+            ...g,
+            from_name: profMap.get(g.from_profile_id) ?? 'Unknown',
+            to_name: profMap.get(g.to_profile_id) ?? 'Unknown',
+            instrument_name: g.instrument_code ? (instMap.get(g.instrument_code) ?? g.instrument_code) : 'Bond',
+          })));
+        }
+      } catch { /* ok if no gifts */ }
 
       setLoading(false);
     })();
@@ -234,13 +290,25 @@ export function Investments() {
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => setSellHolding(h)}
-                      disabled={h.units <= 0}
-                      className="btn-secondary !py-1.5 text-xs"
-                    >
-                      <ArrowUpFromLine className="h-3 w-3" /> Sell / Redeem
-                    </button>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setSellHolding(h)}
+                        disabled={h.units <= 0}
+                        className="btn-secondary !py-1.5 text-xs"
+                      >
+                        <ArrowUpFromLine className="h-3 w-3" /> Sell / Redeem
+                      </button>
+                      {familyMembers.length > 0 && (
+                        <button
+                          onClick={() => setGiftHolding(h)}
+                          disabled={h.units <= 0}
+                          className="btn-ghost !py-1.5 text-xs text-brand-600 hover:bg-brand-50"
+                          title="Gift units to a family member"
+                        >
+                          <Gift className="h-3 w-3" /> Gift
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {(h.lots ?? []).length > 0 && (
                     <div className="mt-3 pt-3 border-t border-ink-100">
@@ -285,6 +353,86 @@ export function Investments() {
         </div>
       )}
 
+      {/* Pending Gifts */}
+      {gifts.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold text-ink-800 mb-3 flex items-center gap-2">
+            <Gift className="h-5 w-5 text-brand-600" /> Gifts
+          </h2>
+          <div className="space-y-2">
+            {gifts.map((g) => {
+              const isReceived = g.to_profile_id === profile.id;
+              const isSent = g.from_profile_id === profile.id;
+              return (
+                <div key={g.id} className={`card p-4 flex items-center justify-between ${
+                  g.status === 'pending' ? 'border-warning-300' : ''
+                }`}>
+                  <div>
+                    <p className="text-sm font-medium text-ink-800">
+                      {g.instrument_name} · {g.units.toFixed(4)} units
+                    </p>
+                    <p className="text-xs text-ink-400">
+                      {isReceived ? `From ${g.from_name}` : `To ${g.to_name}`} · {formatDate(g.sim_date)}
+                      {g.note ? ` · ${g.note}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`badge capitalize ${
+                      g.status === 'accepted' ? 'bg-success-50 text-success-700'
+                      : g.status === 'pending' ? 'bg-warning-50 text-warning-700'
+                      : g.status === 'rejected' ? 'bg-error-50 text-error-700'
+                      : 'bg-ink-100 text-ink-500'
+                    }`}>{g.status}</span>
+                    {g.status === 'pending' && isReceived && (
+                      <>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const { error } = await supabase.rpc('accept_gift', { p_gift_id: g.id });
+                              if (error) throw error;
+                              refresh();
+                            } catch (e) {
+                              alert((e as Error).message);
+                            }
+                          }}
+                          className="btn-primary !py-1 text-xs"
+                        >Accept</button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const { error } = await supabase.rpc('reject_gift', { p_gift_id: g.id });
+                              if (error) throw error;
+                              refresh();
+                            } catch (e) {
+                              alert((e as Error).message);
+                            }
+                          }}
+                          className="btn-secondary !py-1 text-xs"
+                        >Reject</button>
+                      </>
+                    )}
+                    {g.status === 'pending' && isSent && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const { error } = await supabase.rpc('cancel_gift', { p_gift_id: g.id });
+                            if (error) throw error;
+                            refresh();
+                          } catch (e) {
+                            alert((e as Error).message);
+                          }
+                        }}
+                        className="btn-secondary !py-1 text-xs"
+                      >Cancel</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {showBuy && demat && (
         <BuyModal
           profileId={profile.id}
@@ -314,6 +462,27 @@ export function Investments() {
           instruments={instruments}
           onClose={() => setShowSip(false)}
           onDone={() => { setShowSip(false); refresh(); }}
+        />
+      )}
+      {giftHolding && (
+        <GiftModal
+          holding={giftHolding}
+          profileId={profile.id}
+          simDate={simDate}
+          familyMembers={familyMembers}
+          instrumentName={giftHolding.instrument?.name_demo ?? giftHolding.instrument_code}
+          onClose={() => setGiftHolding(null)}
+          onDone={() => { setGiftHolding(null); refresh(); }}
+        />
+      )}
+      {giftBond && (
+        <GiftBondModal
+          bond={giftBond}
+          profileId={profile.id}
+          simDate={simDate}
+          familyMembers={familyMembers}
+          onClose={() => setGiftBond(null)}
+          onDone={() => { setGiftBond(null); refresh(); }}
         />
       )}
     </div>
@@ -779,6 +948,195 @@ function ResultMessage({ result }: { result: { ok: boolean; msg: string } }) {
     }`}>
       {result.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
       <span>{result.msg}</span>
+    </div>
+  );
+}
+
+function GiftModal({ holding, profileId, simDate, familyMembers, instrumentName, onClose, onDone }: {
+  holding: HoldingRow;
+  profileId: string;
+  simDate: string;
+  familyMembers: FamilyMember[];
+  instrumentName: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [toId, setToId] = useState('');
+  const [unitsStr, setUnitsStr] = useState('');
+  const [note, setNote] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setResult(null);
+    try {
+      const units = parseFloat(unitsStr);
+      if (isNaN(units) || units <= 0) throw new Error('Enter valid units');
+      if (units > holding.units + 1e-9) throw new Error(`Cannot gift more than ${holding.units.toFixed(4)} units`);
+      if (!toId) throw new Error('Select a family member');
+
+      const { error } = await supabase.from('gifts').insert({
+        from_profile_id: profileId,
+        to_profile_id: toId,
+        instrument_type: 'mf',
+        instrument_code: holding.instrument_code,
+        units: Math.round(units * 10000) / 10000,
+        status: 'pending',
+        sim_date: simDate,
+        note: note.trim() || null,
+      });
+      if (error) throw error;
+
+      setResult({ ok: true, msg: `Gift of ${units.toFixed(4)} units of ${instrumentName} sent. The recipient must accept it in their Investments page.` });
+      setTimeout(onDone, 2000);
+    } catch (err) {
+      setResult({ ok: false, msg: (err as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <Gift className="h-5 w-5 text-brand-600" /> Gift Units
+          </h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm space-y-1">
+          <p className="text-ink-800 font-medium">{instrumentName}</p>
+          <p className="text-ink-600">Available units: <strong>{holding.units.toFixed(4)}</strong></p>
+        </div>
+
+        <div className="rounded-lg bg-brand-50 border border-brand-200 px-3 py-2 text-xs text-brand-700">
+          The recipient must have a demat account to accept the gift. Units transfer once they accept.
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Gift To</label>
+            <select value={toId} onChange={e => setToId(e.target.value)} className="input" required>
+              <option value="">Select family member...</option>
+              {familyMembers.map(m => (
+                <option key={m.id} value={m.id}>{m.display_name} ({m.family_role === 'parent' ? 'Family Parent' : 'Family Child'})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Units to Gift</label>
+            <input type="text" value={unitsStr} onChange={e => setUnitsStr(e.target.value)} className="input" placeholder={`Max ${holding.units.toFixed(4)}`} required />
+            <button type="button" onClick={() => setUnitsStr(holding.units.toFixed(4))} className="text-xs text-brand-600 hover:underline mt-1">All</button>
+          </div>
+          <div>
+            <label className="label">Note (optional)</label>
+            <input type="text" value={note} onChange={e => setNote(e.target.value)} className="input" placeholder="e.g. Birthday gift" />
+          </div>
+          <button type="submit" disabled={loading} className="btn-primary w-full">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Gift className="h-4 w-4" /> Send Gift</>}
+          </button>
+        </form>
+
+        {result && <ResultMessage result={result} />}
+      </div>
+    </div>
+  );
+}
+
+function GiftBondModal({ bond, profileId, simDate, familyMembers, onClose, onDone }: {
+  bond: BondHolding;
+  profileId: string;
+  simDate: string;
+  familyMembers: FamilyMember[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [toId, setToId] = useState('');
+  const [unitsStr, setUnitsStr] = useState('');
+  const [note, setNote] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setResult(null);
+    try {
+      const units = parseFloat(unitsStr);
+      if (isNaN(units) || units <= 0) throw new Error('Enter valid units');
+      if (units > bond.units + 1e-9) throw new Error(`Cannot gift more than ${bond.units} units`);
+      if (!toId) throw new Error('Select a family member');
+
+      const { error } = await supabase.from('gifts').insert({
+        from_profile_id: profileId,
+        to_profile_id: toId,
+        instrument_type: 'bond',
+        bond_holding_id: bond.id,
+        units: Math.round(units * 10000) / 10000,
+        status: 'pending',
+        sim_date: simDate,
+        note: note.trim() || null,
+      });
+      if (error) throw error;
+
+      setResult({ ok: true, msg: `Gift of ${units} bond units sent. The recipient must accept it in their Investments page.` });
+      setTimeout(onDone, 2000);
+    } catch (err) {
+      setResult({ ok: false, msg: (err as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <Gift className="h-5 w-5 text-brand-600" /> Gift Bond Units
+          </h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm space-y-1">
+          <p className="text-ink-800 font-medium">{bond.issuer_demo} · {bond.instrument_code_demo}</p>
+          <p className="text-ink-600">Available units: <strong>{bond.units}</strong></p>
+          <p className="text-xs text-ink-400">Coupon: {bond.coupon_rate_bps / 100}% · Maturity: {formatDate(bond.maturity_date)}</p>
+        </div>
+
+        <div className="rounded-lg bg-brand-50 border border-brand-200 px-3 py-2 text-xs text-brand-700">
+          The recipient must have a demat account to accept the gift. Bond units transfer once they accept.
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Gift To</label>
+            <select value={toId} onChange={e => setToId(e.target.value)} className="input" required>
+              <option value="">Select family member...</option>
+              {familyMembers.map(m => (
+                <option key={m.id} value={m.id}>{m.display_name} ({m.family_role === 'parent' ? 'Family Parent' : 'Family Child'})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Units to Gift</label>
+            <input type="text" value={unitsStr} onChange={e => setUnitsStr(e.target.value)} className="input" placeholder={`Max ${bond.units}`} required />
+          </div>
+          <div>
+            <label className="label">Note (optional)</label>
+            <input type="text" value={note} onChange={e => setNote(e.target.value)} className="input" placeholder="e.g. Birthday gift" />
+          </div>
+          <button type="submit" disabled={loading} className="btn-primary w-full">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Gift className="h-4 w-4" /> Send Gift</>}
+          </button>
+        </form>
+
+        {result && <ResultMessage result={result} />}
+      </div>
     </div>
   );
 }

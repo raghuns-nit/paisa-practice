@@ -13,6 +13,7 @@ import { misPayoutGenerator } from './postOffice/mis';
 import { ssyInterestGenerator } from './postOffice/ssy';
 import { sipGenerator } from './demat/sip';
 import { insurancePremiumGenerator } from './insurance/premiums';
+import { fdInterestGenerator } from './bank/fdGenerator';
 
 let generatorsRegistered = false;
 
@@ -27,6 +28,7 @@ function ensureGenerators() {
   registerGenerator(ssyInterestGenerator);
   registerGenerator(sipGenerator);
   registerGenerator(insurancePremiumGenerator);
+  registerGenerator(fdInterestGenerator);
   generatorsRegistered = true;
 }
 

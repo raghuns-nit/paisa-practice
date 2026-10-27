@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Landmark, ArrowDownToLine, ArrowUpFromLine, Smartphone, CreditCard,
   FileText, BookOpen, Building2, CheckCircle2, XCircle, Loader2, AlertCircle,
-  Banknote, Receipt, TrendingUp, UserPlus, Clock, ShieldCheck, Lock,
+  Banknote, Receipt, TrendingUp, UserPlus, Clock, ShieldCheck, Lock, Edit2, X,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -10,10 +10,11 @@ import { formatINR, parseRupeesToPaise, amountInWords } from '../lib/money';
 import { formatDate } from '../lib/dates';
 import { post } from '../engine/postings';
 import type { Account, Transaction, DematAccount } from '../lib/types';
+import { addYearsStr } from '../lib/dates';
 
 const ICICI_ORANGE = '#F47216';
 
-type Tab = 'overview' | 'deposit' | 'transfer' | 'upi' | 'atm' | 'cheque' | 'passbook' | 'demat';
+type Tab = 'overview' | 'deposit' | 'fd' | 'transfer' | 'upi' | 'atm' | 'cheque' | 'passbook' | 'demat';
 
 type Payee = {
   id: string;
@@ -68,6 +69,7 @@ export function Bank() {
   const tabs: { id: Tab; label: string; icon: typeof Landmark }[] = [
     { id: 'overview', label: 'Overview', icon: Landmark },
     { id: 'deposit', label: 'Deposit', icon: ArrowDownToLine },
+    { id: 'fd', label: 'FD', icon: TrendingUp },
     { id: 'transfer', label: 'Transfer', icon: ArrowUpFromLine },
     { id: 'upi', label: 'UPI', icon: Smartphone },
     { id: 'atm', label: 'ATM', icon: CreditCard },
@@ -112,6 +114,7 @@ export function Bank() {
         <>
           {tab === 'overview' && <BankOverview accounts={accounts} />}
           {tab === 'deposit' && savings && <DepositForm account={savings} simDate={profile.sim_date} onDone={refresh} />}
+          {tab === 'fd' && savings && <FdForm savings={savings} simDate={profile.sim_date} profileId={profile.id} onDone={refresh} />}
           {tab === 'transfer' && savings && <TransferForm account={savings} simDate={profile.sim_date} onDone={refresh} />}
           {tab === 'upi' && savings && <UpiForm account={savings} simDate={profile.sim_date} onDone={refresh} />}
           {tab === 'atm' && savings && <AtmForm account={savings} simDate={profile.sim_date} onDone={refresh} />}
@@ -125,9 +128,10 @@ export function Bank() {
 }
 
 function BankOverview({ accounts }: { accounts: Account[] }) {
+  const bankAccounts = accounts.filter(a => !a.product.startsWith('po_'));
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      {accounts.map(acc => {
+      {bankAccounts.map(acc => {
         const isSavings = acc.product === 'bank_savings';
         return (
           <div
@@ -156,6 +160,200 @@ function BankOverview({ accounts }: { accounts: Account[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const FD_TENURE_BANDS = [
+  { id: '0-3', label: '0–3 Years', minYears: 0, maxYears: 3, rateBps: 725 },
+  { id: '3-5', label: '3–5 Years', minYears: 3, maxYears: 5, rateBps: 700 },
+  { id: '5-10', label: '5–10 Years', minYears: 5, maxYears: 10, rateBps: 650 },
+] as const;
+
+const FD_FREQUENCIES = ['monthly', 'quarterly', 'yearly', 'cumulative'] as const;
+type FdFrequency = typeof FD_FREQUENCIES[number];
+
+function computeFdInterest(principalPaise: number, rateBps: number, tenureYears: number, freq: FdFrequency): number {
+  if (freq === 'cumulative') {
+    return Math.round(principalPaise * (rateBps / 10000) * tenureYears);
+  }
+  const periodsPerYear = freq === 'monthly' ? 12 : freq === 'quarterly' ? 4 : 1;
+  const perPayout = Math.round(principalPaise * (rateBps / 10000) / periodsPerYear);
+  const totalPayouts = Math.floor(tenureYears * periodsPerYear);
+  return perPayout * totalPayouts;
+}
+
+function FdForm({ savings, simDate, profileId, onDone }: { savings: Account; simDate: string; profileId: string; onDone: () => void }) {
+  const [amount, setAmount] = useState('');
+  const [bandId, setBandId] = useState<string>('0-3');
+  const [tenureYears, setTenureYears] = useState(1);
+  const [frequency, setFrequency] = useState<FdFrequency>('cumulative');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const band = FD_TENURE_BANDS.find(b => b.id === bandId)!;
+  const paise = amount ? (() => { try { return parseRupeesToPaise(amount); } catch { return 0; } })() : 0;
+  const interestTotal = computeFdInterest(paise, band.rateBps, tenureYears, frequency);
+  const maturityDate = addYearsStr(simDate, tenureYears);
+  const perPayout = frequency !== 'cumulative'
+    ? Math.round(paise * (band.rateBps / 10000) / (frequency === 'monthly' ? 12 : frequency === 'quarterly' ? 4 : 1))
+    : 0;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setResult(null);
+    try {
+      const principal = parseRupeesToPaise(amount);
+      if (principal < 100000) {
+        setResult({ ok: false, msg: 'Minimum FD amount is ₹1,000.' });
+        setLoading(false);
+        return;
+      }
+      if (principal > savings.balance_paise) {
+        setResult({ ok: false, msg: `Insufficient balance. Available: ${formatINR(savings.balance_paise)}` });
+        setLoading(false);
+        return;
+      }
+      if (tenureYears < band.minYears || tenureYears > band.maxYears) {
+        setResult({ ok: false, msg: `Tenure must be between ${band.minYears} and ${band.maxYears} years for this band.` });
+        setLoading(false);
+        return;
+      }
+
+      const fdLabel = `FD ${band.rateBps / 100}% ${tenureYears}yr`;
+      const { data: newFd, error: fdErr } = await supabase
+        .from('accounts')
+        .insert({
+          profile_id: profileId,
+          product: 'bank_fd',
+          label: fdLabel,
+          status: 'active',
+          opened_on: simDate,
+          balance_paise: principal,
+          meta: {
+            tenure_years: tenureYears,
+            interest_rate_bps: band.rateBps,
+            payout_frequency: frequency,
+            principal_paise: principal,
+            maturity_date: maturityDate,
+            payout_account_id: savings.id,
+          },
+        })
+        .select()
+        .single();
+      if (fdErr) throw fdErr;
+
+      // Debit the principal from savings
+      await post({
+        profile_id: profileId,
+        account_id: savings.id,
+        sim_date: simDate,
+        kind: 'fd_opening',
+        amount_paise: principal,
+        direction: 'debit',
+        description: `FD opened: ${fdLabel}`,
+        what_happened: `Transferred ${formatINR(principal)} to open FD`,
+        why_it_matters: 'Fixed deposits lock your money for a set period and earn higher interest than savings.',
+        tax_tag: 'none',
+        meta: { fd_id: (newFd as { id: string }).id },
+      });
+
+      setResult({ ok: true, msg: `FD opened: ${formatINR(principal)} at ${band.rateBps / 100}% for ${tenureYears} years. Matures on ${formatDate(maturityDate)}.` });
+      setAmount('');
+      onDone();
+    } catch (e) {
+      setResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="max-w-lg space-y-4">
+      <form onSubmit={handleSubmit} className="card p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" style={{ color: ICICI_ORANGE }} />
+          <h3 className="font-medium text-ink-800">Open Fixed Deposit</h3>
+        </div>
+
+        <div>
+          <label className="label">Deposit Amount (₹)</label>
+          <input type="text" value={amount} onChange={e => setAmount(e.target.value)} className="input" placeholder="e.g. 50,000" required />
+          <p className="text-xs text-ink-400 mt-1">Available: {formatINR(savings.balance_paise)}</p>
+        </div>
+
+        <div>
+          <label className="label">Tenure Band</label>
+          <div className="grid grid-cols-3 gap-2">
+            {FD_TENURE_BANDS.map(b => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => { setBandId(b.id); setTenureYears(b.minYears || 1); }}
+                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  bandId === b.id ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-ink-200 text-ink-600 hover:border-ink-300'
+                }`}
+              >
+                <p className="font-medium">{b.label}</p>
+                <p className="text-xs text-ink-400">{b.rateBps / 100}% p.a.</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Tenure (years): {tenureYears}</label>
+            <input
+              type="range"
+              min={band.minYears || 1}
+              max={band.maxYears}
+              value={tenureYears}
+              onChange={e => setTenureYears(parseInt(e.target.value, 10))}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="label">Interest Payout</label>
+            <select value={frequency} onChange={e => setFrequency(e.target.value as FdFrequency)} className="input">
+              {FD_FREQUENCIES.map(f => (
+                <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {paise > 0 && (
+          <div className="rounded-lg bg-ink-50 px-4 py-3 space-y-1 text-sm">
+            <div className="flex justify-between"><span className="text-ink-500">Principal</span><span className="font-medium text-ink-800">{formatINR(paise)}</span></div>
+            <div className="flex justify-between"><span className="text-ink-500">Rate</span><span className="font-medium text-ink-800">{band.rateBps / 100}% p.a.</span></div>
+            <div className="flex justify-between"><span className="text-ink-500">Tenure</span><span className="font-medium text-ink-800">{tenureYears} years</span></div>
+            <div className="flex justify-between"><span className="text-ink-500">Maturity Date</span><span className="font-medium text-ink-800">{formatDate(maturityDate)}</span></div>
+            {frequency === 'cumulative' ? (
+              <>
+                <div className="flex justify-between"><span className="text-ink-500">Total Interest</span><span className="font-medium text-success-600">{formatINR(interestTotal)}</span></div>
+                <div className="flex justify-between border-t border-ink-200 pt-1"><span className="text-ink-700 font-medium">Maturity Value</span><span className="font-bold text-ink-900">{formatINR(paise + interestTotal)}</span></div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between"><span className="text-ink-500">Interest per {frequency === 'monthly' ? 'month' : frequency === 'quarterly' ? 'quarter' : 'year'}</span><span className="font-medium text-success-600">{formatINR(perPayout)}</span></div>
+                <div className="flex justify-between"><span className="text-ink-500">Total Interest</span><span className="font-medium text-success-600">{formatINR(interestTotal)}</span></div>
+              </>
+            )}
+            <p className="text-[11px] text-ink-400 italic pt-1">
+              {frequency === 'cumulative'
+                ? 'Interest compounded and paid with principal at maturity.'
+                : `Interest credited to savings account ${frequency === 'monthly' ? 'every month' : frequency === 'quarterly' ? 'every 3 months' : 'every year'}. Principal returned at maturity.`}
+            </p>
+          </div>
+        )}
+
+        <button type="submit" disabled={loading} className="btn-primary w-full">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><TrendingUp className="h-4 w-4" /> Open Fixed Deposit</>}
+        </button>
+        {result && <ResultMessage result={result} />}
+      </form>
     </div>
   );
 }
@@ -279,6 +477,11 @@ function TransferForm({ account, simDate, onDone }: { account: Account; simDate:
     setResult(null);
     try {
       const paise = parseRupeesToPaise(amount);
+      if (paise > account.balance_paise) {
+        setResult({ ok: false, msg: `Insufficient balance. Available: ${formatINR(account.balance_paise)}` });
+        setLoading(false);
+        return;
+      }
       if (method === 'rtgs' && paise < 20000000) {
         setResult({ ok: false, msg: 'RTGS minimum is ₹2,00,000. Use NEFT or IMPS for smaller amounts.' });
         setLoading(false);
@@ -419,9 +622,12 @@ function TransferForm({ account, simDate, onDone }: { account: Account; simDate:
               ))}
             </div>
             <p className="text-xs text-ink-400 mt-1">
-              {method === 'neft' && 'NEFT: Batch settlement, no minimum. Typically settles in 30 minutes.'}
-              {method === 'imps' && 'IMPS: Instant, 24x7. Limit ₹5,00,000.'}
-              {method === 'rtgs' && 'RTGS: Real-time, minimum ₹2,00,000. For large transfers.'}
+              {method === 'neft' && 'NEFT: No min/max. Batch settlement, ~30 min.'}
+              {method === 'imps' && 'IMPS: Instant 24x7. Max ₹5,00,000 per txn.'}
+              {method === 'rtgs' && 'RTGS: Real-time. Min ₹2,00,000, no max.'}
+            </p>
+            <p className="text-[11px] text-ink-400 mt-0.5">
+              Available balance: {formatINR(account.balance_paise)}
             </p>
           </div>
 
@@ -909,7 +1115,7 @@ function ChequeForm({ account, simDate, profileId, displayName, onDone }: { acco
           description: 'Cheque bounce penalty',
           what_happened: `Cheque #${cheque.chequeNo} bounced. Penalty of ₹500 charged.`,
           why_it_matters: 'Bounced cheques damage your banking record and incur fees. Legal action is possible under the NI Act.',
-          tax_tag: null,
+          tax_tag: 'none',
         });
         setResult({ ok: false, msg: `Cheque #${cheque.chequeNo} BOUNCED due to insufficient funds. ₹500 penalty charged.` });
       } else {
@@ -980,68 +1186,68 @@ function ChequeForm({ account, simDate, profileId, displayName, onDone }: { acco
     <div className="max-w-2xl space-y-4">
       <button onClick={() => setMode(null)} className="text-sm text-ink-500 hover:text-ink-700">← Back</button>
 
-      {/* Cheque visual */}
-      <div
-        className="bg-white rounded-lg p-6 shadow-md"
-        style={{ border: `2px solid ${ICICI_ORANGE}`, aspectRatio: '8/3.5' }}
-      >
-        {/* A/C Payee Only crossing lines */}
-        <div className="flex items-center gap-3 mb-3">
-          <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
-          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: ICICI_ORANGE }}>A/C Payee Only</span>
-          <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
-        </div>
-
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <p className="font-serif text-lg font-semibold" style={{ color: ICICI_ORANGE }}>ICICI Bank Ltd.</p>
-            <p className="text-xs text-ink-400">IFSC: ICIC0000001</p>
+      {/* Cheque visual — ICICI Bank cheque image with form overlay */}
+      <div className="relative bg-white rounded-lg shadow-md overflow-hidden" style={{ aspectRatio: '8/3.5' }}>
+        <img src="/icici-cheque.webp" alt="ICICI Bank Cheque" className="absolute inset-0 w-full h-full object-cover opacity-90" />
+        <div className="absolute inset-0 bg-white/30">
+          {/* A/C Payee Only crossing lines */}
+          <div className="flex items-center gap-3 pt-4 px-6">
+            <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
+            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: ICICI_ORANGE }}>A/C Payee Only</span>
+            <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
           </div>
-          <div className="text-right">
-            <p className="text-[10px] text-ink-400 uppercase">Cheque No.</p>
-            <p className="font-mono text-sm font-medium text-ink-700">{chequeNo}</p>
+
+          <div className="flex justify-between items-start px-6 mt-2">
+            <div>
+              <p className="font-serif text-lg font-semibold" style={{ color: ICICI_ORANGE }}>ICICI Bank Ltd.</p>
+              <p className="text-xs text-ink-400">IFSC: ICIC0000001</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-ink-400 uppercase">Cheque No.</p>
+              <p className="font-mono text-sm font-medium text-ink-700">{chequeNo}</p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2 text-xs text-ink-500 mb-3">
-          <span className="font-medium">Date:</span>
-          <span className="border-b border-ink-300 px-2">{date}</span>
-        </div>
-
-        <div className="mb-3">
-          <span className="text-xs text-ink-500">Pay </span>
-          <span className="border-b border-ink-300 px-3 text-sm font-medium text-ink-800">
-            {payee || '_________________'}
-          </span>
-        </div>
-
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-xs text-ink-500">₹</span>
-          <span className="border-b border-ink-300 px-2 text-sm font-mono text-ink-800">
-            {amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : '________'}
-          </span>
-        </div>
-
-        <div className="mb-4">
-          <p className="text-xs italic text-ink-600 font-serif">
-            {paise > 0 ? amountInWords(paise) : '________________________________________'}
-          </p>
-        </div>
-
-        <div className="flex justify-between items-end">
-          <div className="text-xs text-ink-400 max-w-[40%]">
-            <p>Memo: {memo || '—'}</p>
+          <div className="flex items-center gap-2 text-xs text-ink-500 px-6 mt-2">
+            <span className="font-medium">Date:</span>
+            <span className="border-b border-ink-300 px-2">{date}</span>
           </div>
-          <div className="text-right">
-            <p className="text-[10px] text-ink-400 uppercase">Signature</p>
-            <div className="border-b border-ink-300 w-32 mt-1 h-6"></div>
-            <p className="text-[10px] text-ink-500 mt-0.5 font-serif">{displayName}</p>
-          </div>
-        </div>
 
-        <div className="mt-4 pt-2 border-t border-ink-100 text-[10px] text-ink-400 flex justify-between">
-          <span>Cancellation: Strike through & write CANCELLED</span>
-          <span>MICR: 000000011</span>
+          <div className="px-6 mt-2">
+            <span className="text-xs text-ink-500">Pay </span>
+            <span className="border-b border-ink-300 px-3 text-sm font-medium text-ink-800">
+              {payee || '_________________'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 px-6 mt-2">
+            <span className="text-xs text-ink-500">₹</span>
+            <span className="border-b border-ink-300 px-2 text-sm font-mono text-ink-800">
+              {amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : '________'}
+            </span>
+          </div>
+
+          <div className="px-6 mt-1">
+            <p className="text-xs italic text-ink-600 font-serif">
+              {paise > 0 ? amountInWords(paise) : '________________________________________'}
+            </p>
+          </div>
+
+          <div className="flex justify-between items-end px-6 mt-2">
+            <div className="text-xs text-ink-400 max-w-[40%]">
+              <p>Memo: {memo || '—'}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-ink-400 uppercase">Signature</p>
+              <div className="border-b border-ink-300 w-32 mt-1 h-6"></div>
+              <p className="text-[10px] text-ink-500 mt-0.5 font-serif">{displayName}</p>
+            </div>
+          </div>
+
+          <div className="mt-2 pt-1 border-t border-ink-100 text-[10px] text-ink-400 flex justify-between px-6">
+            <span>Cancellation: Strike through & write CANCELLED</span>
+            <span>MICR: 000000011</span>
+          </div>
         </div>
       </div>
 
@@ -1177,6 +1383,8 @@ function DematForm({ account }: { account: Account }) {
   const [exchanges, setExchanges] = useState<('BSE' | 'NSE')[]>(['NSE']);
   const [segments, setSegments] = useState<string[]>(['Equity']);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [kycStep, setKycStep] = useState<'idle' | 'verifying' | 'verified' | 'failed'>('idle');
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -1186,7 +1394,6 @@ function DematForm({ account }: { account: Account }) {
         .from('demat_accounts')
         .select('*')
         .eq('profile_id', profile.id)
-        .eq('status', 'active')
         .maybeSingle();
       setDemat((data as DematAccount | null) ?? null);
       setLoading(false);
@@ -1205,6 +1412,19 @@ function DematForm({ account }: { account: Account }) {
     setSegments(prev => prev.includes(seg) ? prev.filter(s => s !== seg) : [...prev, seg]);
   }
 
+  async function runKycVerification(): Promise<boolean> {
+    setKycStep('verifying');
+    await new Promise(r => setTimeout(r, 2000));
+    const panValid = kyc.pan.length === 10;
+    const aadhaarValid = kyc.aadhar4.length === 4;
+    if (panValid && aadhaarValid) {
+      setKycStep('verified');
+      return true;
+    }
+    setKycStep('failed');
+    return false;
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const p = profile;
@@ -1217,8 +1437,18 @@ function DematForm({ account }: { account: Account }) {
       setResult({ ok: false, msg: 'Select at least one segment.' });
       return;
     }
+
     setSubmitting(true);
     setResult(null);
+
+    // Run KYC simulation
+    const kycOk = await runKycVerification();
+    if (!kycOk) {
+      setResult({ ok: false, msg: 'KYC verification failed. Please check your PAN and Aadhaar details.' });
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const id = crypto.randomUUID();
       const { error } = await supabase.from('demat_accounts').insert({
@@ -1229,13 +1459,55 @@ function DematForm({ account }: { account: Account }) {
         status: 'active',
       });
       if (error) throw error;
-      // store segments/exchanges in profile meta (demat_accounts has no meta column)
       await supabase
         .from('profiles')
         .update({ meta: { ...p.meta, demat: { exchanges, segments } } })
         .eq('id', p.id);
       await refreshProfile();
-      setResult({ ok: true, msg: 'Demat account opened with ICICI Securities.' });
+      setResult({ ok: true, msg: 'KYC verified. Demat account opened with ICICI Securities.' });
+      setRefreshKey(k => k + 1);
+    } catch (e) {
+      setResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const p = profile;
+    if (!p || !demat) return;
+    if (exchanges.length === 0) {
+      setResult({ ok: false, msg: 'Select at least one exchange.' });
+      return;
+    }
+    if (segments.length === 0) {
+      setResult({ ok: false, msg: 'Select at least one segment.' });
+      return;
+    }
+
+    setSubmitting(true);
+    setResult(null);
+
+    // Re-run KYC for segments that need additional verification
+    const needsExtraKyc = segments.some(s => s === 'Commodities' || s === 'Currency (Forex)');
+    if (needsExtraKyc) {
+      const kycOk = await runKycVerification();
+      if (!kycOk) {
+        setResult({ ok: false, msg: 'Additional KYC verification failed for Commodities/Currency segment.' });
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    try {
+      await supabase
+        .from('profiles')
+        .update({ meta: { ...p.meta, demat: { exchanges, segments } } })
+        .eq('id', p.id);
+      await refreshProfile();
+      setResult({ ok: true, msg: 'Demat account updated successfully.' });
+      setEditing(false);
       setRefreshKey(k => k + 1);
     } catch (e) {
       setResult({ ok: false, msg: (e as Error).message });
@@ -1248,7 +1520,7 @@ function DematForm({ account }: { account: Account }) {
     return <div className="text-center py-12 text-ink-400">Loading...</div>;
   }
 
-  if (demat) {
+  if (demat && !editing) {
     const segs = storedMeta?.segments ?? segments;
     const exs = storedMeta?.exchanges ?? exchanges;
     return (
@@ -1276,6 +1548,14 @@ function DematForm({ account }: { account: Account }) {
               <dd className="text-ink-800">{segs.join(', ')}</dd>
             </div>
           </dl>
+          <button onClick={() => {
+            setExchanges((exs as ('BSE' | 'NSE')[]) ?? ['NSE']);
+            setSegments(segs ?? ['Equity']);
+            setEditing(true);
+            setResult(null);
+          }} className="btn-secondary w-full mt-4 !py-1.5 text-sm">
+            <Edit2 className="h-4 w-4" /> Edit Account
+          </button>
         </div>
         {result && <ResultMessage result={result} />}
       </div>
@@ -1283,18 +1563,26 @@ function DematForm({ account }: { account: Account }) {
   }
 
   const allSegments = ['Equity', 'Futures', 'Options', 'Commodities', 'Currency (Forex)'];
+  const isEditing = demat && editing;
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-lg space-y-5 card p-6">
-      <div className="flex items-center gap-2">
-        <TrendingUp className="h-5 w-5" style={{ color: ICICI_ORANGE }} />
-        <h3 className="font-medium text-ink-800">Open ICICI Securities Demat Account</h3>
+    <form onSubmit={isEditing ? handleEditSubmit : handleSubmit} className="max-w-lg space-y-5 card p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" style={{ color: ICICI_ORANGE }} />
+          <h3 className="font-medium text-ink-800">{isEditing ? 'Edit Demat Account' : 'Open ICICI Securities Demat Account'}</h3>
+        </div>
+        {isEditing && (
+          <button type="button" onClick={() => { setEditing(false); setResult(null); }} className="text-ink-400 hover:text-ink-600">
+            <X className="h-5 w-5" />
+          </button>
+        )}
       </div>
 
-      {/* KYC (pre-filled, non-editable) */}
+      {/* KYC verification simulation */}
       <div>
         <p className="text-xs uppercase tracking-wide text-ink-400 mb-2 flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5" /> KYC Details
+          <ShieldCheck className="h-3.5 w-3.5" /> KYC Details {isEditing && '(Re-verification for new segments)'}
         </p>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -1310,10 +1598,25 @@ function DematForm({ account }: { account: Account }) {
             <input type="text" value={kyc.dob} readOnly className="input bg-ink-50 text-ink-500" />
           </div>
           <div>
-            <label className="label">Aadhar (last 4 digits)</label>
+            <label className="label">Aadhar (last 4)</label>
             <input type="text" value={`XXXX-XXXX-${kyc.aadhar4}`} readOnly className="input bg-ink-50 text-ink-500 font-mono" />
           </div>
         </div>
+        {kycStep === 'verifying' && (
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-warning-50 border border-warning-500/30 px-3 py-2 text-sm text-warning-700">
+            <Loader2 className="h-4 w-4 animate-spin" /> Verifying PAN and Aadhaar with KRA...
+          </div>
+        )}
+        {kycStep === 'verified' && (
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-success-50 border border-success-500/30 px-3 py-2 text-sm text-success-700">
+            <CheckCircle2 className="h-4 w-4" /> KYC verified successfully
+          </div>
+        )}
+        {kycStep === 'failed' && (
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-error-50 border border-error-500/30 px-3 py-2 text-sm text-error-700">
+            <XCircle className="h-4 w-4" /> KYC verification failed
+          </div>
+        )}
       </div>
 
       {/* Exchanges */}
@@ -1351,12 +1654,12 @@ function DematForm({ account }: { account: Account }) {
           ))}
         </div>
         <p className="text-xs text-ink-400 mt-2 italic">
-          As per SEBI guidelines, derivatives (Futures/Options) require separate activation. Commodities and Currency segments require additional KYC verification.
+          Commodities and Currency segments require additional KYC verification. The simulation will re-verify your KYC if you select these.
         </p>
       </div>
 
       <button type="submit" disabled={submitting} className="btn-primary w-full">
-        {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <><TrendingUp className="h-4 w-4" /> Open Demat Account</>}
+        {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : isEditing ? <><Edit2 className="h-4 w-4" /> Save Changes</> : <><TrendingUp className="h-4 w-4" /> Open Demat Account</>}
       </button>
       {result && <ResultMessage result={result} />}
     </form>

@@ -11,6 +11,7 @@ export interface Profile {
   auth_user_id: string | null;
   display_name: string;
   role: 'parent' | 'learner';
+  family_role: 'parent' | 'child';
   is_super_admin: boolean;
   sim_date: string;
   phone_sim: string | null;
@@ -237,7 +238,7 @@ export interface DematAccount {
   profile_id: string;
   dp_demo: string;
   funded_from_account_id: string;
-  status: 'active' | 'closed';
+  status: 'active' | 'closed' | 'pending';
   created_at: string;
 }
 
@@ -259,6 +260,21 @@ export interface HoldingLot {
   purchase_date: string;
   units: number;
   cost_paise: number;
+}
+
+export interface Gift {
+  id: string;
+  from_profile_id: string;
+  to_profile_id: string;
+  instrument_type: 'mf' | 'bond';
+  instrument_code: string | null;
+  bond_holding_id: string | null;
+  units: number;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+  sim_date: string;
+  note: string | null;
+  created_at: string;
+  accepted_at: string | null;
 }
 
 export interface LearningProgress {

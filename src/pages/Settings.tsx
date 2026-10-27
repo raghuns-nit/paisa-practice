@@ -15,6 +15,7 @@ interface FamilyMember {
   id: string;
   display_name: string;
   role: string;
+  family_role: string;
   auth_user_id: string | null;
   sim_date: string;
   phone_sim: string | null;
@@ -312,13 +313,14 @@ function UserManagement({ profileId, onResult }: {
         id: r.id as string,
         display_name: r.display_name as string,
         role: r.role as string,
+        family_role: (r.family_role as string) ?? 'child',
         auth_user_id: r.auth_user_id as string | null,
         sim_date: r.sim_date as string,
         phone_sim: r.phone_sim as string | null,
         failed_attempts: r.failed_attempts as number,
         locked_until: r.locked_until as string | null,
         is_super_admin: false,
-        meta: {},
+        meta: (r.meta as Record<string, unknown>) ?? {},
       })));
       // Fetch full profile data including is_super_admin and meta
       const { data: fullProfiles } = await supabase.from('profiles').select('id, is_super_admin, meta');
@@ -768,13 +770,14 @@ function DataEditor({ onResult }: {
           id: r.id as string,
           display_name: r.display_name as string,
           role: r.role as string,
+          family_role: (r.family_role as string) ?? 'child',
           auth_user_id: null as string | null,
           sim_date: '',
           phone_sim: null as string | null,
           failed_attempts: 0,
           locked_until: null as string | null,
           is_super_admin: false,
-          meta: {},
+          meta: (r.meta as Record<string, unknown>) ?? {},
         }));
         setMembers(parsed);
         if (parsed.length > 0) setSelectedProfileId(parsed[0].id);
@@ -1514,7 +1517,7 @@ function FamilyManagement({ profileId, onResult }: {
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [confirmAction, setConfirmAction] = useState<{ id: string; name: string; action: 'promote' | 'demote' } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ id: string; name: string; action: 'promote' | 'demote' | 'set_parent_role' | 'set_child_role' } | null>(null);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -1526,13 +1529,14 @@ function FamilyManagement({ profileId, onResult }: {
         id: r.id as string,
         display_name: r.display_name as string,
         role: r.role as string,
+        family_role: (r.family_role as string) ?? 'child',
         auth_user_id: r.auth_user_id as string | null,
         sim_date: r.sim_date as string,
         phone_sim: r.phone_sim as string | null,
         failed_attempts: r.failed_attempts as number,
         locked_until: r.locked_until as string | null,
         is_super_admin: false,
-        meta: {},
+        meta: (r.meta as Record<string, unknown>) ?? {},
       })));
     } catch (e) {
       onResult({ ok: false, msg: (e as Error).message });
@@ -1575,6 +1579,21 @@ function FamilyManagement({ profileId, onResult }: {
     }
   }
 
+  async function handleSetFamilyRole(memberId: string, role: 'parent' | 'child') {
+    setActionLoading(memberId);
+    try {
+      const { error } = await supabase.from('profiles').update({ family_role: role }).eq('id', memberId);
+      if (error) throw error;
+      await fetchMembers();
+      onResult({ ok: true, msg: `Family role set to ${role === 'parent' ? 'Parent' : 'Child'}.` });
+    } catch (e) {
+      onResult({ ok: false, msg: (e as Error).message });
+    } finally {
+      setActionLoading(null);
+      setConfirmAction(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="card p-5">
@@ -1597,13 +1616,21 @@ function FamilyManagement({ profileId, onResult }: {
         <span className="badge bg-brand-50 text-brand-700 ml-auto">{members.length} members</span>
       </div>
       <p className="text-sm text-ink-500 mb-4">
-        As a Parent/Admin, you can promote learners to parent or demote other parents back to learner. At least one parent must always remain.
+        Manage your family hierarchy. Each member is either a Parent or Child in the family structure. Parents can gift investments to any family member. A learner can be either a family parent (e.g. spouse) or a family child.
       </p>
 
       <div className="space-y-2">
         {members.map((m) => {
           const isMe = m.id === profileId;
           const isParent = m.role === 'parent';
+          const isFamilyParent = m.family_role === 'parent';
+          const kyc = m.meta?.kyc as { dob?: string } | undefined;
+          const dob = kyc?.dob;
+          let ageStr = '';
+          if (dob) {
+            const age = Math.floor((new Date(m.sim_date).getTime() - new Date(dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+            ageStr = ` · ${age} yrs`;
+          }
           return (
             <div key={m.id} className={`flex items-center justify-between rounded-lg border px-4 py-3 ${
               isParent ? 'border-brand-200 bg-brand-50/30' : 'border-ink-200'
@@ -1619,17 +1646,28 @@ function FamilyManagement({ profileId, onResult }: {
                   </div>
                 )}
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium text-ink-800">{m.display_name}</p>
                     {isMe && <span className="badge bg-ink-100 text-ink-500 text-[10px]">You</span>}
                     {!m.auth_user_id && <span className="badge bg-warning-50 text-warning-700 text-[10px]">Unclaimed</span>}
+                    <span className={`badge text-[10px] ${isFamilyParent ? 'bg-brand-50 text-brand-700' : 'bg-pink-50 text-pink-700'}`}>
+                      {isFamilyParent ? 'Family Parent' : 'Family Child'}
+                    </span>
                   </div>
-                  <p className="text-xs text-ink-400 capitalize">{m.role}</p>
+                  <p className="text-xs text-ink-400 capitalize">{m.role}{ageStr}</p>
                 </div>
               </div>
 
               {!isMe && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <button
+                    onClick={() => setConfirmAction({ id: m.id, name: m.display_name, action: isFamilyParent ? 'set_child_role' : 'set_parent_role' })}
+                    disabled={actionLoading === m.id}
+                    className="btn-ghost !py-1.5 text-xs text-ink-600 hover:bg-ink-50"
+                    title={isFamilyParent ? 'Set as Family Child' : 'Set as Family Parent'}
+                  >
+                    {actionLoading === m.id ? <Loader2 className="h-3 w-3 animate-spin" /> : isFamilyParent ? 'Set as Child' : 'Set as Parent'}
+                  </button>
                   {isParent ? (
                     <button
                       onClick={() => setConfirmAction({ id: m.id, name: m.display_name, action: 'demote' })}
@@ -1672,15 +1710,27 @@ function FamilyManagement({ profileId, onResult }: {
             <p className="text-sm text-ink-600">
               {confirmAction.action === 'promote'
                 ? `Promote ${confirmAction.name} to Parent/Admin? They will be able to manage family members, unlock accounts, and view all family data.`
-                : `Demote ${confirmAction.name} to Learner? They will lose family management access but keep their own accounts and data.`}
+                : confirmAction.action === 'demote'
+                ? `Demote ${confirmAction.name} to Learner? They will lose family management access but keep their own accounts and data.`
+                : confirmAction.action === 'set_parent_role'
+                ? `Set ${confirmAction.name} as a Family Parent? This means they are a parent in the family hierarchy (e.g. spouse) and can gift investments to family children.`
+                : `Set ${confirmAction.name} as a Family Child? This means they are a child in the family hierarchy and can receive gifts from family parents.`}
             </p>
             <div className="flex gap-2">
               <button onClick={() => setConfirmAction(null)} className="btn-secondary flex-1">Cancel</button>
               <button
-                onClick={() => confirmAction.action === 'promote' ? handlePromote(confirmAction.id) : handleDemote(confirmAction.id)}
-                className={confirmAction.action === 'promote' ? 'btn-primary flex-1' : 'btn-secondary flex-1'}
+                onClick={() => {
+                  if (confirmAction.action === 'promote') handlePromote(confirmAction.id);
+                  else if (confirmAction.action === 'demote') handleDemote(confirmAction.id);
+                  else if (confirmAction.action === 'set_parent_role') handleSetFamilyRole(confirmAction.id, 'parent');
+                  else if (confirmAction.action === 'set_child_role') handleSetFamilyRole(confirmAction.id, 'child');
+                }}
+                className={confirmAction.action === 'promote' || confirmAction.action === 'set_parent_role' ? 'btn-primary flex-1' : 'btn-secondary flex-1'}
               >
-                {confirmAction.action === 'promote' ? 'Promote' : 'Demote'}
+                {confirmAction.action === 'promote' ? 'Promote'
+                  : confirmAction.action === 'demote' ? 'Demote'
+                  : confirmAction.action === 'set_parent_role' ? 'Set as Parent'
+                  : 'Set as Child'}
               </button>
             </div>
           </div>

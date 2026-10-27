@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard, Landmark, PiggyBank, Shield, TrendingUp, BookOpen,
-  FileText, Search, Settings, LogOut, Menu, X, Lock, Phone,
+  FileText, Search, Settings, LogOut, Menu, X, Lock, Phone, Calculator,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { TimeTravel } from './TimeTravel';
@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { to: '/search', label: 'Search', icon: Search },
   { to: '/phone-inbox', label: 'Phone Inbox', icon: Phone },
   { to: '/security', label: 'Security', icon: Lock },
+  { to: '/income-tax', label: 'Income Tax', icon: Calculator },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

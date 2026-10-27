@@ -16,6 +16,7 @@ import { PhoneInbox } from './pages/PhoneInbox';
 import { Security } from './pages/Security';
 import { Settings } from './pages/Settings';
 import { Statements } from './pages/Statements';
+import { IncomeTax } from './pages/IncomeTax';
 import { TransactionDetail } from './pages/TransactionDetail';
 import { ComingSoon } from './pages/ComingSoon';
 import type { JSX } from 'react';
@@ -76,6 +77,7 @@ export default function App() {
             <Route path="security" element={<Security />} />
             <Route path="settings" element={<Settings />} />
             <Route path="statements" element={<Statements />} />
+            <Route path="income-tax" element={<IncomeTax />} />
             <Route path="transaction/:id" element={<TransactionDetail />} />
             <Route path="*" element={<ComingSoon />} />
           </Route>

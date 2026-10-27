@@ -34,39 +34,50 @@ export const misPayoutGenerator: Generator = async (ctx: GeneratorContext): Prom
           event: 'MIS monthly payout',
           detail: `₹${payoutAmount / 100} monthly income from ${acc.label}`,
           apply: async (tc) => {
-            const { data: savings } = await ctx.supabase
+            // Credit interest to Post Office Savings Account (preferred) or bank savings (fallback)
+            const { data: poSa } = await ctx.supabase
               .from('accounts')
               .select('id')
               .eq('profile_id', tc.profileId)
-              .eq('product', 'bank_savings')
+              .eq('product', 'po_sa')
               .maybeSingle();
 
-            const savingsAcc = savings as { id: string } | null;
+            let payoutAccountId: string | null = (poSa as { id: string } | null)?.id ?? null;
 
-            await post({
-              profile_id: tc.profileId,
-              account_id: acc.id,
-              sim_date: dateStr,
-              kind: 'mis_payout',
-              amount_paise: payoutAmount,
-              direction: 'credit',
-              description: 'MIS monthly payout',
-              what_happened: `₹${payoutAmount / 100} monthly interest from MIS`,
-              why_it_matters: 'MIS provides regular monthly income. Useful for retirees.',
-              tax_tag: 'interest_income',
-              event_key: eventKey,
-            });
+            if (!payoutAccountId) {
+              const { data: bankSa } = await ctx.supabase
+                .from('accounts')
+                .select('id')
+                .eq('profile_id', tc.profileId)
+                .eq('product', 'bank_savings')
+                .maybeSingle();
+              payoutAccountId = (bankSa as { id: string } | null)?.id ?? null;
+            }
 
-            if (savingsAcc) {
+            if (payoutAccountId) {
               const { data: sa } = await ctx.supabase
                 .from('accounts')
                 .select('balance_paise')
-                .eq('id', savingsAcc.id)
+                .eq('id', payoutAccountId)
                 .single();
               if (sa) {
                 const saBal = (sa as { balance_paise: number }).balance_paise;
                 const newBal = saBal + payoutAmount;
-                await ctx.supabase.from('accounts').update({ balance_paise: newBal }).eq('id', savingsAcc.id);
+                await ctx.supabase.from('accounts').update({ balance_paise: newBal }).eq('id', payoutAccountId);
+
+                await post({
+                  profile_id: tc.profileId,
+                  account_id: payoutAccountId,
+                  sim_date: dateStr,
+                  kind: 'mis_payout',
+                  amount_paise: payoutAmount,
+                  direction: 'credit',
+                  description: 'MIS monthly payout',
+                  what_happened: `₹${payoutAmount / 100} monthly interest from MIS`,
+                  why_it_matters: 'MIS provides regular monthly income. Useful for retirees.',
+                  tax_tag: 'interest_income',
+                  event_key: eventKey,
+                });
               }
             }
           },

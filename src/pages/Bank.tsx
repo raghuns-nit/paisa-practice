@@ -1120,9 +1120,9 @@ function ChequeForm({ account, simDate, profileId, displayName, onDone }: { acco
         setResult({ ok: false, msg: `Cheque #${cheque.chequeNo} BOUNCED due to insufficient funds. ₹500 penalty charged.` });
       } else {
         setResult({ ok: true, msg: `Cheque #${cheque.chequeNo} cleared. ${formatINR(cheque.amount)} debited.` });
+        setWrittenCheques(prev => prev.filter(c => c.chequeNo !== cheque.chequeNo));
+        onDone();
       }
-      setWrittenCheques(prev => prev.filter(c => c.chequeNo !== cheque.chequeNo));
-      onDone();
     } catch (e) {
       setResult({ ok: false, msg: (e as Error).message });
     } finally {
@@ -1174,7 +1174,13 @@ function ChequeForm({ account, simDate, profileId, displayName, onDone }: { acco
             ))}
           </div>
         )}
-        {result && <ResultMessage result={result} />}
+        {result && (result.ok ? <ResultMessage result={result} /> : (
+          <div className="rounded-xl border-4 border-error-600 bg-error-50 p-5 text-error-800 shadow-lg animate-fade-in">
+            <p className="text-xl font-extrabold uppercase tracking-wide">Cheque Bounce</p>
+            <p className="mt-2 text-base font-semibold">Insufficient balance. The cheque was not cleared.</p>
+            <p className="mt-1 text-base font-bold">Penalty charged: ₹500</p>
+          </div>
+        ))}
       </div>
     );
   }
@@ -1186,68 +1192,16 @@ function ChequeForm({ account, simDate, profileId, displayName, onDone }: { acco
     <div className="max-w-2xl space-y-4">
       <button onClick={() => setMode(null)} className="text-sm text-ink-500 hover:text-ink-700">← Back</button>
 
-      {/* Cheque visual — ICICI Bank cheque image with form overlay */}
       <div className="relative bg-white rounded-lg shadow-md overflow-hidden" style={{ aspectRatio: '8/3.5' }}>
-        <img src="/icici-cheque.webp" alt="ICICI Bank Cheque" className="absolute inset-0 w-full h-full object-cover opacity-90" />
-        <div className="absolute inset-0 bg-white/30">
-          {/* A/C Payee Only crossing lines */}
-          <div className="flex items-center gap-3 pt-4 px-6">
-            <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
-            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: ICICI_ORANGE }}>A/C Payee Only</span>
-            <div className="h-px flex-1" style={{ background: ICICI_ORANGE }} />
-          </div>
-
-          <div className="flex justify-between items-start px-6 mt-2">
-            <div>
-              <p className="font-serif text-lg font-semibold" style={{ color: ICICI_ORANGE }}>ICICI Bank Ltd.</p>
-              <p className="text-xs text-ink-400">IFSC: ICIC0000001</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] text-ink-400 uppercase">Cheque No.</p>
-              <p className="font-mono text-sm font-medium text-ink-700">{chequeNo}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-ink-500 px-6 mt-2">
-            <span className="font-medium">Date:</span>
-            <span className="border-b border-ink-300 px-2">{date}</span>
-          </div>
-
-          <div className="px-6 mt-2">
-            <span className="text-xs text-ink-500">Pay </span>
-            <span className="border-b border-ink-300 px-3 text-sm font-medium text-ink-800">
-              {payee || '_________________'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 px-6 mt-2">
-            <span className="text-xs text-ink-500">₹</span>
-            <span className="border-b border-ink-300 px-2 text-sm font-mono text-ink-800">
-              {amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : '________'}
-            </span>
-          </div>
-
-          <div className="px-6 mt-1">
-            <p className="text-xs italic text-ink-600 font-serif">
-              {paise > 0 ? amountInWords(paise) : '________________________________________'}
-            </p>
-          </div>
-
-          <div className="flex justify-between items-end px-6 mt-2">
-            <div className="text-xs text-ink-400 max-w-[40%]">
-              <p>Memo: {memo || '—'}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] text-ink-400 uppercase">Signature</p>
-              <div className="border-b border-ink-300 w-32 mt-1 h-6"></div>
-              <p className="text-[10px] text-ink-500 mt-0.5 font-serif">{displayName}</p>
-            </div>
-          </div>
-
-          <div className="mt-2 pt-1 border-t border-ink-100 text-[10px] text-ink-400 flex justify-between px-6">
-            <span>Cancellation: Strike through & write CANCELLED</span>
-            <span>MICR: 000000011</span>
-          </div>
+        <img src="/icici-cheque.webp" alt="ICICI Bank Cheque" className="absolute inset-0 w-full h-full object-cover" />
+        <div className="absolute inset-0 text-ink-900 font-medium">
+          <span className="absolute right-[8%] top-[20%] font-mono text-[clamp(0.7rem,2vw,1.15rem)]">{chequeNo}</span>
+          <span className="absolute left-[16%] top-[31%] text-[clamp(0.65rem,1.8vw,1rem)]">{date}</span>
+          <span className="absolute left-[14%] top-[44%] max-w-[48%] truncate text-[clamp(0.8rem,2.3vw,1.3rem)]">{payee || 'Payee name'}</span>
+          <span className="absolute left-[7%] top-[57%] text-[clamp(0.8rem,2.2vw,1.25rem)]">{amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : 'Amount'}</span>
+          <span className="absolute left-[8%] top-[68%] max-w-[60%] truncate font-serif italic text-[clamp(0.55rem,1.5vw,0.85rem)]">{paise > 0 ? amountInWords(paise) : 'Amount in words'}</span>
+          <span className="absolute left-[4%] bottom-[8%] max-w-[42%] truncate text-[clamp(0.5rem,1.2vw,0.7rem)] text-ink-600">{memo || 'Memo'}</span>
+          <span className="absolute right-[6%] bottom-[7%] text-[clamp(0.55rem,1.4vw,0.8rem)]">{displayName}</span>
         </div>
       </div>
 

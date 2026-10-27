@@ -804,9 +804,11 @@ function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, on
         setResult({ ok: true, msg: `PO Cheque #${chequeNo} cleared. ${formatINR(amt)} debited.` });
         setWrittenCheques(prev => [...prev, { chequeNo, payee, amount: amt, date }]);
       }
-      setChequeNo(String(parseInt(chequeNo) + 1).padStart(6, '0'));
-      setPayee(''); setAmountInNum(''); setMemo('');
-      onDone();
+      if (!txn || txn.direction !== 'failed_debit') {
+        setChequeNo(String(parseInt(chequeNo) + 1).padStart(6, '0'));
+        setPayee(''); setAmountInNum(''); setMemo('');
+        onDone();
+      }
     } catch (e) {
       setResult({ ok: false, msg: (e as Error).message });
     } finally {
@@ -828,46 +830,15 @@ function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, on
 
         {/* Cheque visual */}
         <div className="relative bg-white rounded-lg shadow-md overflow-hidden" style={{ aspectRatio: '8/3.5' }}>
-          <img src="/post-office-cheque.webp" alt="Post Office Cheque" className="absolute inset-0 w-full h-full object-cover opacity-90" />
-          <div className="absolute inset-0 bg-white/30">
-            <div className="flex items-center gap-3 pt-4 px-6">
-              <div className="h-px flex-1 bg-blue-600" />
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-600">A/C Payee Only</span>
-              <div className="h-px flex-1 bg-blue-600" />
-            </div>
-            <div className="flex justify-between items-start px-6 mt-2">
-              <div>
-                <p className="font-serif text-lg font-semibold text-blue-700">Post Office Savings Bank</p>
-                <p className="text-xs text-ink-400">India Post</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-ink-400 uppercase">Cheque No.</p>
-                <p className="font-mono text-sm font-medium text-ink-700">{chequeNo}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-ink-500 px-6 mt-2">
-              <span className="font-medium">Date:</span>
-              <span className="border-b border-ink-300 px-2">{date}</span>
-            </div>
-            <div className="px-6 mt-2">
-              <span className="text-xs text-ink-500">Pay </span>
-              <span className="border-b border-ink-300 px-3 text-sm font-medium text-ink-800">{payee || '_________________'}</span>
-            </div>
-            <div className="flex items-center gap-2 px-6 mt-2">
-              <span className="text-xs text-ink-500">₹</span>
-              <span className="border-b border-ink-300 px-2 text-sm font-mono text-ink-800">{amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : '________'}</span>
-            </div>
-            <div className="px-6 mt-1">
-              <p className="text-xs italic text-ink-600 font-serif">{paise > 0 ? amountInWords(paise) : '________________________________________'}</p>
-            </div>
-            <div className="flex justify-between items-end px-6 mt-2">
-              <div className="text-xs text-ink-400 max-w-[40%]"><p>Memo: {memo || '—'}</p></div>
-              <div className="text-right">
-                <p className="text-[10px] text-ink-400 uppercase">Signature</p>
-                <div className="border-b border-ink-300 w-32 mt-1 h-6"></div>
-                <p className="text-[10px] text-ink-500 mt-0.5 font-serif">{displayName}</p>
-              </div>
-            </div>
+          <img src="/post-office-cheque.webp" alt="Post Office Cheque" className="absolute inset-0 w-full h-full object-cover" />
+          <div className="absolute inset-0 text-ink-900 font-medium">
+            <span className="absolute right-[8%] top-[20%] font-mono text-[clamp(0.7rem,2vw,1.15rem)]">{chequeNo}</span>
+            <span className="absolute left-[16%] top-[31%] text-[clamp(0.65rem,1.8vw,1rem)]">{date}</span>
+            <span className="absolute left-[14%] top-[44%] max-w-[48%] truncate text-[clamp(0.8rem,2.3vw,1.3rem)]">{payee || 'Payee name'}</span>
+            <span className="absolute left-[7%] top-[57%] text-[clamp(0.8rem,2.2vw,1.25rem)]">{amountInNum ? parseFloat(amountInNum.replace(/,/g, '')).toLocaleString('en-IN') : 'Amount'}</span>
+            <span className="absolute left-[8%] top-[68%] max-w-[60%] truncate font-serif italic text-[clamp(0.55rem,1.5vw,0.85rem)]">{paise > 0 ? amountInWords(paise) : 'Amount in words'}</span>
+            <span className="absolute left-[4%] bottom-[8%] max-w-[42%] truncate text-[clamp(0.5rem,1.2vw,0.7rem)] text-ink-600">{memo || 'Memo'}</span>
+            <span className="absolute right-[6%] bottom-[7%] text-[clamp(0.55rem,1.4vw,0.8rem)]">{displayName}</span>
           </div>
         </div>
 
@@ -899,12 +870,17 @@ function PoChequeModal({ saAccount, profileId, displayName, simDate, onClose, on
           </button>
         </form>
 
-        {result && (
-          <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ${result.ok ? 'bg-success-50 border border-success-500/30 text-success-700' : 'bg-error-50 border border-error-500/30 text-error-700'}`}>
-            {result.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
-            <span>{result.msg}</span>
+        {result && (result.ok ? (
+          <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-sm bg-success-50 border border-success-500/30 text-success-700">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /><span>{result.msg}</span>
           </div>
-        )}
+        ) : (
+          <div className="rounded-xl border-4 border-error-600 bg-error-50 p-5 text-error-800 shadow-lg animate-fade-in">
+            <p className="text-xl font-extrabold uppercase tracking-wide">Cheque Bounce</p>
+            <p className="mt-2 text-base font-semibold">Insufficient balance. The cheque was not cleared.</p>
+            <p className="mt-1 text-base font-bold">Penalty charged: ₹500</p>
+          </div>
+        ))}
       </div>
     </div>
   );
